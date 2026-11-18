@@ -30,7 +30,9 @@ class RuntimeConfigService:
             return self.default_config()
         with self.path.open("r", encoding="utf-8") as f:
             data = json.load(f)
-        return self.default_config().model_copy(update=data)
+        merged = self.default_config().model_dump()
+        merged.update(data)
+        return ModelConfig.model_validate(merged)
 
     def save(self, config: ModelConfig) -> ModelConfig:
         self.path.parent.mkdir(parents=True, exist_ok=True)

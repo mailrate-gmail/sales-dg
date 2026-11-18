@@ -311,7 +311,68 @@ curl -X POST \
 }
 ```
 
-## 4. 参会人和声纹 API
+## 4. Agent 上下文与记忆 API
+
+### 4.1 查询会议 Agent 记忆
+
+### GET `/api/meetings/{meeting_id}/agent/memory`
+
+返回当前会议的 Agent 记忆，包括短期上下文、客户痛点、风险、承诺、待办、问题和决策日志。
+
+**响应示例**
+
+```json
+{
+  "meeting_id": "session_20261118_103000_a1b2c3",
+  "goal": "了解客户当前业务痛点，并推动下一次需求调研。",
+  "short_term_context": ["张经理: 我们线索跟进不及时。"],
+  "pain_points": ["张经理: 我们线索跟进不及时。"],
+  "risks": [],
+  "commitments": [],
+  "todos": [],
+  "questions": [],
+  "decisions": [
+    {
+      "id": "decision_ab12cd34ef",
+      "type": "extract_pain_point",
+      "reason": "发言中包含痛点或业务问题",
+      "content": "我们线索跟进不及时。",
+      "message_id": "message_1234567890",
+      "speaker_name": "张经理",
+      "created_at": "2026-11-18T10:31:05"
+    }
+  ],
+  "updated_at": "2026-11-18T10:31:05"
+}
+```
+
+### 4.2 重新运行会议 Agent
+
+### POST `/api/meetings/{meeting_id}/agent/run`
+
+从当前会议全部消息重新构建 Agent 记忆。适用于手动修正参会人名称后刷新 Agent 工作台。
+
+**响应示例**
+
+```json
+{
+  "memory": {
+    "meeting_id": "session_20261118_103000_a1b2c3",
+    "goal": "了解客户当前业务痛点，并推动下一次需求调研。",
+    "short_term_context": [],
+    "pain_points": [],
+    "risks": [],
+    "commitments": [],
+    "todos": [],
+    "questions": [],
+    "decisions": [],
+    "updated_at": "2026-11-18T10:40:00"
+  },
+  "actions": []
+}
+```
+
+## 5. 参会人和声纹 API
 
 参会人 API 用于维护已知参会人和声纹样本。会议室中的“识别个体 ID 关联”是动态的，不要求提前创建参会人。
 
@@ -394,7 +455,7 @@ curl -X POST \
   http://localhost:8000/api/participants/participant_ab12cd34/voiceprint
 ```
 
-## 5. AI API
+## 6. AI API
 
 ### 5.1 独立生成建议回复
 
@@ -420,7 +481,7 @@ curl -X POST \
 }
 ```
 
-## 6. 系统配置 API
+## 7. 系统配置 API
 
 ### 6.1 查询模型配置
 
@@ -434,7 +495,24 @@ curl -X POST \
   "llm_model": "deepseek-chat",
   "llm_base_url": "https://api.deepseek.com",
   "llm_api_key": "",
+  "llm_api_type": "chat_completions",
   "llm_timeout_seconds": 30,
+  "model_availability": {
+    "deepseek": true,
+    "gpt": false,
+    "qwen": false,
+    "grok": false
+  },
+  "custom_models": [
+    {
+      "id": "oci-gpt55",
+      "name": "OCI GPT-5.5",
+      "model": "openai.gpt-5.5",
+      "base_url": "https://your-oci-endpoint.example.com",
+      "api_type": "responses",
+      "description": "用户自定义 OCI 模型"
+    }
+  ],
   "whisper_model": "small",
   "whisper_device": "cpu",
   "whisper_compute_type": "int8",
@@ -461,7 +539,43 @@ curl -X POST \
 data/model_config.json
 ```
 
-## 7. 兼容接口
+### 6.3 测试当前模型连接
+
+### POST `/api/config/test`
+
+测试当前或传入的 OpenAI Compatible LLM 配置是否可用。该接口会根据 `llm_api_type` 发送一个极小的测试请求。
+
+当 `llm_api_type` 为 `responses` 时，会改为调用 `{llm_base_url}/v1/responses`，适用于 GPT-5 / 部分 OCI OpenAI Compatible 服务等 Responses API 模式。
+
+**请求体**
+
+可不传；不传时使用当前保存的配置。也可以传完整 `ModelConfig` 用于测试尚未保存的配置。
+
+**响应示例**
+
+```json
+{
+  "ok": true,
+  "provider": "qwen",
+  "model": "qwen-plus",
+  "message": "OK",
+  "latency_ms": 823
+}
+```
+
+失败示例：
+
+```json
+{
+  "ok": false,
+  "provider": "gpt",
+  "model": "gpt-4o-mini",
+  "message": "未配置 API Key。",
+  "latency_ms": 0
+}
+```
+
+## 8. 兼容接口
 
 以下接口保留以兼容早期前端或外部调用方：
 
@@ -475,7 +589,7 @@ data/model_config.json
 | `POST` | `/api/sessions/{session_id}/export` | 导出会话 Markdown |
 | `PUT` | `/api/sessions/{session_id}/messages/{message_id}/speaker` | 修正单条消息说话人 |
 
-## 8. 典型业务调用流程
+## 9. 典型业务调用流程
 
 ### 8.1 新会议实时辅助流程
 

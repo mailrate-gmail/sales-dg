@@ -16,7 +16,11 @@ class AudioService:
             "16000",
             str(output_path),
         ]
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or "").strip().splitlines()[-1:] or ["ffmpeg 音频转换失败"]
+            raise ValueError(detail[0]) from exc
         return output_path
 
 

@@ -2,11 +2,14 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.models import (
+    AgentMemory,
+    AgentRunResponse,
     ExportResponse,
+    ConnectionTestResponse,
     MeetingCreate,
     Message,
     ModelConfig,
@@ -25,6 +28,7 @@ from app.models import (
 )
 from app.services.asr import asr_service
 from app.services.audio import audio_service
+from app.services.context_manager import context_manager
 from app.services.llm_client import llm_client
 from app.services.runtime_config import runtime_config
 from app.services.speaker import speaker_service
@@ -93,7 +97,10 @@ async def process_audio_file(session_id: str, file: UploadFile) -> Message:
     wav_path = audio_dir / f"{message_id}.wav"
 
     raw_path.write_bytes(await file.read())
-    audio_service.convert_to_wav(raw_path, wav_path)
+    try:
+        audio_service.convert_to_wav(raw_path, wav_path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"音频格式无法解析：{exc}") from exc
 
     text = asr_service.transcribe(str(wav_path))
     if not text:
@@ -136,6 +143,7 @@ async def process_audio_file(session_id: str, file: UploadFile) -> Message:
     )
     session.messages.append(message)
     save_session(session)
+    context_manager.update_with_message(session, message)
     return message
 
 
@@ -159,6 +167,7 @@ def bind_speaker_identity(session_id: str, speaker_identity_id: str, payload: Sp
         raise HTTPException(status_code=404, detail="识别个体 ID 不存在")
 
     save_session(session)
+    context_manager.rebuild(session)
     return SpeakerBindResponse(
         speaker_identity_id=speaker_identity_id,
         speaker_name=payload.speaker_name,
@@ -184,6 +193,13 @@ def get_config() -> ModelConfig:
 @app.put("/api/config", response_model=ModelConfig)
 def update_config(payload: ModelConfig) -> ModelConfig:
     return runtime_config.save(payload)
+
+
+@app.post("/api/config/test", response_model=ConnectionTestResponse)
+async def test_config_connection(payload: ModelConfig | None = Body(default=None)) -> ConnectionTestResponse:
+    config = payload or runtime_config.get()
+    result = await llm_client.test_connection(config)
+    return ConnectionTestResponse(**result)
 
 
 @app.post("/api/meetings", response_model=Session)
@@ -233,6 +249,19 @@ async def summarize_meeting(meeting_id: str) -> SummaryResponse:
 def export_meeting(meeting_id: str) -> ExportResponse:
     data = export_session(meeting_id)
     return ExportResponse(**data)
+
+
+@app.get("/api/meetings/{meeting_id}/agent/memory", response_model=AgentMemory)
+def get_agent_memory(meeting_id: str) -> AgentMemory:
+    session = load_session(meeting_id)
+    return context_manager.load_memory(session.id, session.goal)
+
+
+@app.post("/api/meetings/{meeting_id}/agent/run", response_model=AgentRunResponse)
+def run_meeting_agent(meeting_id: str) -> AgentRunResponse:
+    session = load_session(meeting_id)
+    memory = context_manager.rebuild(session)
+    return AgentRunResponse(memory=memory, actions=memory.decisions[-20:])
 
 
 @app.post("/api/participants", response_model=Participant)
@@ -309,6 +338,8 @@ def create_session(payload: SessionCreate) -> Session:
 def list_sessions() -> list[SessionSummary]:
     sessions: list[SessionSummary] = []
     for path in sorted(storage.sessions_dir.glob("*.json"), reverse=True):
+        if path.name.endswith(".memory.json"):
+            continue
         data = storage.read_json(path)
         if not data:
             continue

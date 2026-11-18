@@ -19,6 +19,7 @@
 - 根据参会人配置判断是否生成 AI 建议回复；
 - 客户发言白色展示，我方发言黄色展示；
 - 一键生成结构化会后总结；
+- 会议 Agent 工作台：维护上下文、客户痛点、风险、承诺、待办、问题和决策日志；
 - 会话记录和导出 Markdown 保存在本地文件中。
 
 ## 2. 技术栈
@@ -72,6 +73,8 @@ http://localhost:8000
 ```
 
 API 文档：[`docs/API.md`](docs/API.md)
+
+Agent 定义：[`AGENTS.md`](AGENTS.md)
 
 健康检查：
 
@@ -160,6 +163,7 @@ data/
 ├── participants.json
 ├── participants/
 ├── sessions/
+│   └── {meeting_id}.memory.json
 ├── audio/
 └── exports/
 ```

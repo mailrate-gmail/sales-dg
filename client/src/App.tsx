@@ -55,7 +55,10 @@ interface ModelConfig {
   llm_model: string
   llm_base_url: string
   llm_api_key: string
+  llm_api_type: 'chat_completions' | 'responses'
   llm_timeout_seconds: number
+  model_availability: Record<string, boolean>
+  custom_models: CustomModelConfig[]
   whisper_model: string
   whisper_device: string
   whisper_compute_type: string
@@ -63,6 +66,25 @@ interface ModelConfig {
   energy_threshold: number
   silence_duration_ms: number
   min_speech_duration_ms: number
+}
+
+interface CustomModelConfig {
+  id: string
+  name: string
+  model: string
+  base_url: string
+  api_type: 'chat_completions' | 'responses'
+  description: string
+}
+
+interface ModelPreset {
+  id: string
+  name: string
+  model: string
+  baseUrl: string
+  apiType: 'chat_completions' | 'responses'
+  description: string
+  custom?: boolean
 }
 
 interface RecognizedSpeaker {
@@ -73,12 +95,51 @@ interface RecognizedSpeaker {
   latestScore?: number
 }
 
+interface AiQaItem {
+  id: string
+  speakerName: string
+  question: string
+  answer: string
+  status: 'thinking' | 'done' | 'error'
+}
+
+interface AgentDecision {
+  id: string
+  type: string
+  reason: string
+  content: string
+  message_id?: string | null
+  speaker_name: string
+  created_at: string
+}
+
+interface AgentMemory {
+  meeting_id: string
+  goal: string
+  short_term_context: string[]
+  pain_points: string[]
+  risks: string[]
+  commitments: string[]
+  todos: string[]
+  questions: string[]
+  decisions: AgentDecision[]
+  updated_at: string
+}
+
 const defaultConfig: ModelConfig = {
   llm_provider: 'deepseek',
   llm_model: 'deepseek-chat',
   llm_base_url: 'https://api.deepseek.com',
   llm_api_key: '',
+  llm_api_type: 'chat_completions',
   llm_timeout_seconds: 30,
+  model_availability: {
+    deepseek: true,
+    gpt: false,
+    qwen: false,
+    grok: false,
+  },
+  custom_models: [],
   whisper_model: 'small',
   whisper_device: 'cpu',
   whisper_compute_type: 'int8',
@@ -88,6 +149,51 @@ const defaultConfig: ModelConfig = {
   min_speech_duration_ms: 1000,
 }
 
+const modelPresets: ModelPreset[] = [
+  {
+    id: 'deepseek',
+    name: 'DeepSeek',
+    model: 'deepseek-chat',
+    baseUrl: 'https://api.deepseek.com',
+    apiType: 'chat_completions' as const,
+    description: '适合中文商务会谈，成本较低。',
+  },
+  {
+    id: 'gpt',
+    name: 'GPT / OpenAI',
+    model: 'gpt-4o-mini',
+    baseUrl: 'https://api.openai.com',
+    apiType: 'responses' as const,
+    description: 'OpenAI Compatible 官方接口。',
+  },
+  {
+    id: 'qwen',
+    name: 'Qwen / 通义千问',
+    model: 'qwen-plus',
+    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode',
+    apiType: 'chat_completions' as const,
+    description: '阿里云 DashScope OpenAI 兼容模式。',
+  },
+  {
+    id: 'grok',
+    name: 'Grok / xAI',
+    model: 'grok-3-mini',
+    baseUrl: 'https://api.x.ai',
+    apiType: 'responses' as const,
+    description: 'xAI OpenAI Compatible 接口。',
+  },
+]
+
+function AgentMemoryBlock({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div className="agent-memory-block">
+      <h3>{title}</h3>
+      {items.length === 0 && <p className="empty">暂无</p>}
+      {items.map((item, index) => <p key={`${title}_${index}`}>{item}</p>)}
+    </div>
+  )
+}
+
 export function App() {
   const [page, setPage] = useState<Page>('new')
   const [theme, setTheme] = useState<Theme>('dark')
@@ -95,21 +201,28 @@ export function App() {
   const [goal, setGoal] = useState('了解客户当前业务痛点，并推动下一次需求调研。')
   const [sessionId, setSessionId] = useState<string>('')
   const [sessionTitle, setSessionTitle] = useState('')
-  const [participants, setParticipants] = useState<Participant[]>([])
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [messages, setMessages] = useState<Message[]>([])
   const [speakerNames, setSpeakerNames] = useState<Record<string, string>>({})
+  const [speakerPushTargets, setSpeakerPushTargets] = useState<Record<string, boolean>>({})
+  const [aiQas, setAiQas] = useState<AiQaItem[]>([])
+  const [agentMemory, setAgentMemory] = useState<AgentMemory | null>(null)
   const [latestSuggestion, setLatestSuggestion] = useState('')
   const [summary, setSummary] = useState('')
   const [recording, setRecording] = useState(false)
+  const [speakerPanelOpen, setSpeakerPanelOpen] = useState(true)
   const [energyLevel, setEnergyLevel] = useState(0)
   const [config, setConfig] = useState<ModelConfig>(defaultConfig)
+  const [connectionTest, setConnectionTest] = useState('')
+  const [testingConnection, setTestingConnection] = useState(false)
 
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const mediaStreamRef = useRef<MediaStream | null>(null)
+  const segmentRecorderRef = useRef<MediaRecorder | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
   const animationFrameRef = useRef<number | null>(null)
   const chunksRef = useRef<BlobPart[]>([])
+  const recordingRef = useRef(false)
   const speechActiveRef = useRef(false)
   const segmentStartedAtRef = useRef(0)
   const lastVoiceAtRef = useRef(0)
@@ -125,7 +238,6 @@ export function App() {
   }, [theme])
 
   useEffect(() => {
-    loadParticipants()
     loadConfig()
     loadSessions()
   }, [])
@@ -153,13 +265,21 @@ export function App() {
     return Array.from(map.values())
   }, [messages, speakerNames])
 
+  const availableModelCards: ModelPreset[] = useMemo(() => [
+    ...modelPresets,
+    ...(config.custom_models || []).map((item) => ({
+      id: item.id,
+      name: item.name,
+      model: item.model,
+      baseUrl: item.base_url,
+      apiType: item.api_type,
+      description: item.description || '用户自定义模型',
+      custom: true,
+    })),
+  ], [config.custom_models])
+
   function getSpeakerIdentity(message: Message) {
     return message.speaker_identity_id || message.participant_id || `voice_${message.id}`
-  }
-
-  async function loadParticipants() {
-    const res = await fetch(`${API_BASE}/api/participants`)
-    if (res.ok) setParticipants(await res.json())
   }
 
   async function loadSessions() {
@@ -173,10 +293,11 @@ export function App() {
   }
 
   async function saveConfig() {
+    const configToSave = ensureCurrentModelVisible(config)
     const res = await fetch(`${API_BASE}/api/config`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(config),
+      body: JSON.stringify(configToSave),
     })
     if (!res.ok) {
       alert('模型配置保存失败')
@@ -184,6 +305,118 @@ export function App() {
     }
     setConfig(await res.json())
     alert('模型配置已保存')
+  }
+
+  async function testModelConnection() {
+    setTestingConnection(true)
+    setConnectionTest('正在测试当前模型连接...')
+    try {
+      const res = await fetch(`${API_BASE}/api/config/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config),
+      })
+      const data = await res.json()
+      setConnectionTest(`${data.ok ? '✅ 连接成功' : '❌ 连接失败'}｜${data.provider} / ${data.model}｜${data.latency_ms}ms｜${data.message}`)
+    } catch (error) {
+      setConnectionTest(`❌ 连接测试异常：${String(error)}`)
+    } finally {
+      setTestingConnection(false)
+    }
+  }
+
+  function applyModelPreset(presetId: string) {
+    const preset = availableModelCards.find((item) => item.id === presetId)
+    if (!preset) return
+    setConfig((current) => ({
+      ...current,
+      llm_provider: preset.id,
+      llm_model: preset.model,
+      llm_base_url: preset.baseUrl,
+      llm_api_type: preset.apiType,
+      model_availability: {
+        ...current.model_availability,
+        [preset.id]: true,
+      },
+    }))
+    setConnectionTest('')
+  }
+
+  function toggleModelAvailability(presetId: string, enabled: boolean) {
+    setConfig((current) => ({
+      ...current,
+      model_availability: {
+        ...current.model_availability,
+        [presetId]: enabled,
+      },
+    }))
+  }
+
+  function normalizeModelId(value: string) {
+    return value.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '')
+  }
+
+  function ensureCurrentModelVisible(current: ModelConfig): ModelConfig {
+    const providerId = normalizeModelId(current.llm_provider || current.llm_model)
+    if (!providerId || !current.llm_model.trim() || !current.llm_base_url.trim()) {
+      return current
+    }
+
+    const presetExists = modelPresets.some((item) => item.id === providerId)
+    const nextAvailability = {
+      ...current.model_availability,
+      [providerId]: true,
+    }
+
+    if (presetExists) {
+      return {
+        ...current,
+        llm_provider: providerId,
+        model_availability: nextAvailability,
+      }
+    }
+
+    const nextCustomModel: CustomModelConfig = {
+      id: providerId,
+      name: current.llm_provider.trim() || providerId,
+      model: current.llm_model.trim(),
+      base_url: current.llm_base_url.trim().replace(/\/$/, ''),
+      api_type: current.llm_api_type,
+      description: `保存的模型配置：${current.llm_model.trim()}`,
+    }
+
+    const existingIndex = (current.custom_models || []).findIndex((item) => item.id === providerId)
+    const nextCustomModels = [...(current.custom_models || [])]
+    if (existingIndex >= 0) {
+      nextCustomModels[existingIndex] = nextCustomModel
+    } else {
+      nextCustomModels.push(nextCustomModel)
+    }
+
+    return {
+      ...current,
+      llm_provider: providerId,
+      llm_base_url: nextCustomModel.base_url,
+      model_availability: nextAvailability,
+      custom_models: nextCustomModels,
+    }
+  }
+
+  function removeCustomModel(id: string) {
+    setConfig((current) => {
+      const nextAvailability = { ...current.model_availability }
+      delete nextAvailability[id]
+      const removingActive = current.llm_provider === id
+      return {
+        ...current,
+        llm_provider: removingActive ? defaultConfig.llm_provider : current.llm_provider,
+        llm_model: removingActive ? defaultConfig.llm_model : current.llm_model,
+        llm_base_url: removingActive ? defaultConfig.llm_base_url : current.llm_base_url,
+        llm_api_type: removingActive ? defaultConfig.llm_api_type : current.llm_api_type,
+        model_availability: nextAvailability,
+        custom_models: (current.custom_models || []).filter((item) => item.id !== id),
+      }
+    })
   }
 
   async function enterMeeting() {
@@ -207,10 +440,14 @@ export function App() {
     setSessionTitle(data.title)
     setMessages([])
     setSpeakerNames({})
+    setSpeakerPushTargets({})
+    setAiQas([])
+    setAgentMemory(null)
     setLatestSuggestion('')
     setSummary('')
     setPage('room')
     await loadSessions()
+    await loadAgentMemory(data.id)
   }
 
   async function openSession(id: string) {
@@ -226,9 +463,18 @@ export function App() {
     setGoal(data.goal)
     setMessages(data.messages || [])
     setSummary(data.summary || '')
+    setAiQas((data.messages || []).filter((m) => m.ai_suggestion).map((m) => ({
+      id: m.id,
+      speakerName: m.speaker_name,
+      question: m.text,
+      answer: m.ai_suggestion || '',
+      status: 'done',
+    })))
     setLatestSuggestion([...data.messages].reverse().find((m) => m.ai_suggestion)?.ai_suggestion || '')
     setSpeakerNames({})
+    setSpeakerPushTargets({})
     setPage('room')
+    await loadAgentMemory(data.id)
   }
 
   async function startRecording() {
@@ -238,7 +484,14 @@ export function App() {
     }
 
     activeSessionIdRef.current = sessionId
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    let stream: MediaStream
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    } catch (error) {
+      console.error(error)
+      alert('无法访问麦克风，请检查浏览器麦克风权限。')
+      return
+    }
     const audioContext = new AudioContext()
     const source = audioContext.createMediaStreamSource(stream)
     const analyser = audioContext.createAnalyser()
@@ -247,34 +500,45 @@ export function App() {
 
     audioContextRef.current = audioContext
     analyserRef.current = analyser
-
-    const recorder = new MediaRecorder(stream)
-    mediaRecorderRef.current = recorder
+    mediaStreamRef.current = stream
     chunksRef.current = []
+    recordingRef.current = true
     speechActiveRef.current = false
 
-    recorder.ondataavailable = (event) => {
-      if (event.data.size > 0 && speechActiveRef.current) {
-        chunksRef.current.push(event.data)
-      }
-    }
-
-    recorder.onstop = async () => {
-      if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current)
-      await flushSpeechSegment()
-      await audioContext.close()
-      stream.getTracks().forEach((track) => track.stop())
-      setEnergyLevel(0)
-    }
-
-    recorder.start(250)
     setRecording(true)
     monitorEnergy()
   }
 
+  function startSpeechSegment() {
+    const stream = mediaStreamRef.current
+    if (!stream || segmentRecorderRef.current) return
+
+    chunksRef.current = []
+    speechActiveRef.current = true
+    segmentStartedAtRef.current = Date.now()
+    lastVoiceAtRef.current = Date.now()
+
+    const recorder = new MediaRecorder(stream)
+    segmentRecorderRef.current = recorder
+
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) chunksRef.current.push(event.data)
+    }
+
+    recorder.onstop = async () => {
+      const blob = new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' })
+      chunksRef.current = []
+      segmentRecorderRef.current = null
+      speechActiveRef.current = false
+      if (blob.size > 0) await uploadAudioSegment(blob)
+    }
+
+    recorder.start(250)
+  }
+
   function monitorEnergy() {
     const analyser = analyserRef.current
-    if (!analyser) return
+    if (!analyser || !recordingRef.current) return
 
     const buffer = new Float32Array(analyser.fftSize)
     analyser.getFloatTimeDomainData(buffer)
@@ -287,9 +551,7 @@ export function App() {
     if (rms >= activeConfig.energy_threshold) {
       lastVoiceAtRef.current = now
       if (!speechActiveRef.current) {
-        speechActiveRef.current = true
-        segmentStartedAtRef.current = now
-        chunksRef.current = []
+        startSpeechSegment()
       }
     }
 
@@ -297,24 +559,22 @@ export function App() {
       const silenceMs = now - lastVoiceAtRef.current
       const speechMs = now - segmentStartedAtRef.current
       if (silenceMs >= activeConfig.silence_duration_ms && speechMs >= activeConfig.min_speech_duration_ms) {
-        void flushSpeechSegment()
+        flushSpeechSegment()
       }
     }
 
     animationFrameRef.current = requestAnimationFrame(monitorEnergy)
   }
 
-  async function flushSpeechSegment() {
-    if (!speechActiveRef.current || chunksRef.current.length === 0) {
+  function flushSpeechSegment() {
+    const recorder = segmentRecorderRef.current
+    if (recorder && recorder.state !== 'inactive') {
+      recorder.stop()
+    } else {
       speechActiveRef.current = false
       chunksRef.current = []
-      return
+      segmentRecorderRef.current = null
     }
-
-    const blob = new Blob(chunksRef.current, { type: 'audio/webm' })
-    speechActiveRef.current = false
-    chunksRef.current = []
-    await uploadAudioSegment(blob)
   }
 
   async function uploadAudioSegment(blob: Blob) {
@@ -325,19 +585,35 @@ export function App() {
     form.append('session_id', activeSessionId)
     form.append('file', blob, 'speech.webm')
     try {
-    const res = await fetch(`${API_BASE}/api/meetings/${activeSessionId}/audio`, { method: 'POST', body: form })
-      if (!res.ok) return
+      const res = await fetch(`${API_BASE}/api/meetings/${activeSessionId}/audio`, { method: 'POST', body: form })
+      if (!res.ok) {
+        const error = await res.json().catch(() => null)
+        alert(error?.detail || '音频识别失败，请稍后重试。')
+        return
+      }
       const message: Message = await res.json()
       setMessages((items) => [...items, message])
       if (message.ai_suggestion) setLatestSuggestion(message.ai_suggestion)
+      void maybePushQuestionToAi(message, [...messages, message])
       await loadSessions()
+      await loadAgentMemory(activeSessionId)
     } catch (error) {
       console.error(error)
     }
   }
 
   function stopRecording() {
-    mediaRecorderRef.current?.stop()
+    recordingRef.current = false
+    if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current)
+    flushSpeechSegment()
+    window.setTimeout(() => {
+      void audioContextRef.current?.close()
+      mediaStreamRef.current?.getTracks().forEach((track) => track.stop())
+      mediaStreamRef.current = null
+      analyserRef.current = null
+      audioContextRef.current = null
+      setEnergyLevel(0)
+    }, 300)
     setRecording(false)
   }
 
@@ -360,25 +636,85 @@ export function App() {
         ? { ...item, speaker_identity_id: identityId, speaker_name: name, role: 'customer', need_reply: true, corrected: true }
         : item
     )))
+    await loadAgentMemory(sessionId)
   }
 
-  async function correctMessageSpeaker(messageId: string, participantId: string) {
+  async function loadAgentMemory(meetingId = sessionId) {
+    if (!meetingId) return
+    const res = await fetch(`${API_BASE}/api/meetings/${meetingId}/agent/memory`)
+    if (res.ok) setAgentMemory(await res.json())
+  }
+
+  async function runAgent() {
     if (!sessionId) return
-    const body = participantId
-      ? { participant_id: participantId }
-      : { speaker_name: '未知说话人', role: 'unknown' }
-    const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/messages/${messageId}/speaker`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
+    const res = await fetch(`${API_BASE}/api/meetings/${sessionId}/agent/run`, { method: 'POST' })
     if (!res.ok) {
-      alert('修正说话人失败')
+      alert('Agent 运行失败')
       return
     }
-    const updated: Message = await res.json()
-    setMessages((items) => items.map((item) => (item.id === updated.id ? updated : item)))
-    if (updated.ai_suggestion) setLatestSuggestion(updated.ai_suggestion)
+    const data = await res.json()
+    setAgentMemory(data.memory)
+  }
+
+  function toggleSpeakerAiPush(identityId: string, enabled: boolean) {
+    setSpeakerPushTargets((current) => ({ ...current, [identityId]: enabled }))
+  }
+
+  function isLikelyQuestion(text: string) {
+    const value = text.trim()
+    if (!value) return false
+    if (/[?？]$/.test(value) || /[?？]/.test(value)) return true
+    return /(吗|呢|什么|为什么|为何|怎么|如何|是否|能否|能不能|可不可以|有没有|哪[个些里]|多少|几|何时|什么时候|请问)/.test(value)
+  }
+
+  async function maybePushQuestionToAi(message: Message, historyMessages: Message[]) {
+    const identityId = getSpeakerIdentity(message)
+    if (!speakerPushTargets[identityId]) return
+    if (!isLikelyQuestion(message.text)) return
+
+    const qaId = `qa_${message.id}`
+    const speakerName = speakerNames[identityId] || message.speaker_name || identityId
+    setAiQas((items) => [...items, {
+      id: qaId,
+      speakerName,
+      question: message.text,
+      answer: 'AI 正在思考...',
+      status: 'thinking',
+    }])
+
+    const conversationHistory = historyMessages
+      .slice(-8)
+      .map((item) => `${item.speaker_name}: ${item.text}`)
+      .join('\n')
+
+    try {
+      const res = await fetch(`${API_BASE}/api/ai/suggest-reply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          meeting_goal: goal,
+          conversation_history: conversationHistory,
+          latest_customer_message: message.text,
+        }),
+      })
+      if (!res.ok) {
+        const error = await res.json().catch(() => null)
+        throw new Error(error?.detail || 'AI 回复生成失败')
+      }
+      const data = await res.json()
+      setLatestSuggestion(data.suggestion)
+      setAiQas((items) => items.map((item) => item.id === qaId ? {
+        ...item,
+        answer: data.suggestion,
+        status: 'done',
+      } : item))
+    } catch (error) {
+      setAiQas((items) => items.map((item) => item.id === qaId ? {
+        ...item,
+        answer: `生成失败：${String(error)}`,
+        status: 'error',
+      } : item))
+    }
   }
 
   async function summarizeSession() {
@@ -483,21 +819,83 @@ export function App() {
         <section className="page-card">
           <div className="page-title">
             <h1>模型配置</h1>
-            <p>配置 LLM、Whisper、声纹阈值和前端能量切分参数。</p>
+            <p>管理 Grok、Qwen、GPT 等模型可用性，测试连接，并配置当前会议助手使用的模型。</p>
+          </div>
+
+          <div className="model-section-title">
+            <h2>模型可用性</h2>
+            <span>启用后表示该模型可被系统选择；点击“套用”会将其设为当前 LLM。</span>
+          </div>
+          <div className="model-provider-grid">
+            {availableModelCards.map((preset) => {
+              const enabled = config.model_availability?.[preset.id] ?? false
+              const active = config.llm_provider === preset.id
+              return (
+                <div className={active ? 'model-card active' : 'model-card'} key={preset.id}>
+                  <div className="model-card-header">
+                    <div>
+                      <strong>{preset.name}</strong>
+                      <small>{preset.model}</small>
+                    </div>
+                    <label className="switch-label">
+                      <input
+                        type="checkbox"
+                        checked={enabled}
+                        onChange={(e) => toggleModelAvailability(preset.id, e.target.checked)}
+                      />
+                      可用
+                    </label>
+                  </div>
+                  <p>{preset.description}</p>
+                  <code>{preset.baseUrl}</code>
+                  <div className="model-card-actions">
+                    <button className="secondary-action" onClick={() => applyModelPreset(preset.id)}>套用</button>
+                    {preset.custom && <button className="danger subtle-danger" onClick={() => removeCustomModel(preset.id)}>删除</button>}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+
+          <div className="model-section-title">
+            <h2>当前 LLM 连接</h2>
+            <span>保存后，当前 Provider/Model/Base URL 会自动显示在“模型可用性”区域。</span>
           </div>
           <div className="config-grid">
             <label>LLM Provider<input value={config.llm_provider} onChange={(e) => updateConfig('llm_provider', e.target.value)} /></label>
             <label>LLM Model<input value={config.llm_model} onChange={(e) => updateConfig('llm_model', e.target.value)} /></label>
             <label>Base URL<input value={config.llm_base_url} onChange={(e) => updateConfig('llm_base_url', e.target.value)} /></label>
+            <label>接口类型
+              <select value={config.llm_api_type} onChange={(e) => updateConfig('llm_api_type', e.target.value as ModelConfig['llm_api_type'])}>
+                <option value="chat_completions">Chat Completions (/v1/chat/completions)</option>
+                <option value="responses">Responses (/v1/responses)</option>
+              </select>
+            </label>
             <label>API Key<input type="password" value={config.llm_api_key} onChange={(e) => updateConfig('llm_api_key', e.target.value)} /></label>
+            <label>请求超时秒数<input type="number" value={config.llm_timeout_seconds} onChange={(e) => updateConfig('llm_timeout_seconds', Number(e.target.value))} /></label>
+          </div>
+
+          <div className="model-actions">
+            <button onClick={saveConfig}>保存模型配置</button>
+            <button className="secondary-action" disabled={testingConnection} onClick={testModelConnection}>
+              {testingConnection ? '测试中...' : '测试连接'}
+            </button>
+          </div>
+          {connectionTest && <div className="connection-result">{connectionTest}</div>}
+
+          <div className="model-section-title">
+            <h2>本地语音与识别参数</h2>
+            <span>控制 Whisper、声纹匹配和浏览器能量切分。</span>
+          </div>
+          <div className="config-grid">
             <label>Whisper Model<input value={config.whisper_model} onChange={(e) => updateConfig('whisper_model', e.target.value)} /></label>
             <label>Whisper Device<input value={config.whisper_device} onChange={(e) => updateConfig('whisper_device', e.target.value)} /></label>
+            <label>Whisper Compute Type<input value={config.whisper_compute_type} onChange={(e) => updateConfig('whisper_compute_type', e.target.value)} /></label>
             <label>声纹阈值<input type="number" step="0.01" value={config.speaker_threshold} onChange={(e) => updateConfig('speaker_threshold', Number(e.target.value))} /></label>
             <label>能量阈值<input type="number" step="0.001" value={config.energy_threshold} onChange={(e) => updateConfig('energy_threshold', Number(e.target.value))} /></label>
             <label>静音切分 ms<input type="number" value={config.silence_duration_ms} onChange={(e) => updateConfig('silence_duration_ms', Number(e.target.value))} /></label>
             <label>最短语音 ms<input type="number" value={config.min_speech_duration_ms} onChange={(e) => updateConfig('min_speech_duration_ms', Number(e.target.value))} /></label>
           </div>
-          <button onClick={saveConfig}>保存模型配置</button>
         </section>
 
         <section className="page-card">
@@ -532,26 +930,39 @@ export function App() {
         <section className="page-card speaker-panel">
           <div className="section-heading">
             <h2>参会人员</h2>
+            <button className="secondary-action" onClick={() => setSpeakerPanelOpen((open) => !open)}>
+              {speakerPanelOpen ? '折叠' : '展开'}
+            </button>
           </div>
-          <div className="speaker-list">
-            {recognizedSpeakers.length === 0 && <div className="empty">开始录音后，系统会在这里动态添加识别到的个体 ID。</div>}
-            {recognizedSpeakers.map((speaker) => (
-              <div className="speaker-row" key={speaker.id}>
-                <code>{speaker.id}</code>
-                <input
-                  placeholder="输入参会人员名称并回车关联"
-                  value={speakerNames[speaker.id] ?? speaker.name}
-                  onChange={(e) => setSpeakerNames((current) => ({ ...current, [speaker.id]: e.target.value }))}
-                  onBlur={() => applySpeakerName(speaker.id)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') void applySpeakerName(speaker.id)
-                  }}
-                />
-                <span>{speaker.count} 条发言</span>
-                <span>匹配分：{speaker.latestScore?.toFixed(2) ?? '-'}</span>
-              </div>
-            ))}
-          </div>
+          {speakerPanelOpen && (
+            <div className="speaker-list">
+              {recognizedSpeakers.length === 0 && <div className="empty">开始录音后，系统会在这里动态添加识别到的个体 ID。</div>}
+              {recognizedSpeakers.map((speaker) => (
+                <div className="speaker-row" key={speaker.id}>
+                  <code>{speaker.id}</code>
+                  <input
+                    placeholder="输入参会人员名称并回车关联"
+                    value={speakerNames[speaker.id] ?? speaker.name}
+                    onChange={(e) => setSpeakerNames((current) => ({ ...current, [speaker.id]: e.target.value }))}
+                    onBlur={() => applySpeakerName(speaker.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') void applySpeakerName(speaker.id)
+                    }}
+                  />
+                  <label className="speaker-push-toggle">
+                    <input
+                      type="checkbox"
+                      checked={speakerPushTargets[speaker.id] ?? false}
+                      onChange={(e) => toggleSpeakerAiPush(speaker.id, e.target.checked)}
+                    />
+                    推送 AI
+                  </label>
+                  <span>{speaker.count} 条发言</span>
+                  <span>匹配分：{speaker.latestScore?.toFixed(2) ?? '-'}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </section>
 
         <div className="room-columns">
@@ -568,10 +979,6 @@ export function App() {
                     <strong>{message.speaker_name}{message.corrected ? '（已修正）' : ''}</strong>
                     <code>{getSpeakerIdentity(message)}</code>
                     <span className="score">匹配分：{message.speaker_score?.toFixed(2) ?? '-'}</span>
-                    <select value={message.participant_id ?? ''} onChange={(e) => correctMessageSpeaker(message.id, e.target.value)}>
-                      <option value="">手动选择已建声纹</option>
-                      {participants.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                    </select>
                   </div>
                   <p>{message.text}</p>
                 </div>
@@ -581,14 +988,57 @@ export function App() {
 
           <section className="page-card ai-card">
             <h2>AI 回复</h2>
-            <p>{latestSuggestion || '当客户或需要答复的参会人发言后，这里会显示建议回复。'}</p>
-            <div className="suggestion-history">
-              {messages.filter((message) => message.ai_suggestion).map((message) => (
-                <blockquote key={message.id}>{message.ai_suggestion}</blockquote>
+            <div className="qa-panel">
+              {aiQas.length === 0 && (
+                <div className="empty qa-empty">
+                  勾选“参会人员”中的“推送 AI”后，该参会人的问题会自动进入这里生成回复。
+                </div>
+              )}
+              {aiQas.map((item) => (
+                <div className={`qa-item ${item.status}`} key={item.id}>
+                  <div className="qa-question">
+                    <span>{item.speakerName}</span>
+                    <p>{item.question}</p>
+                  </div>
+                  <div className="qa-answer">
+                    <span>AI 回复</span>
+                    <p>{item.answer}</p>
+                  </div>
+                </div>
               ))}
             </div>
           </section>
         </div>
+
+        <section className="page-card agent-card">
+          <div className="section-heading">
+            <h2>Agent 工作台</h2>
+            <button className="secondary-action" onClick={runAgent}>刷新 Agent 记忆</button>
+          </div>
+          {!agentMemory ? (
+            <div className="empty">暂无 Agent 记忆。录音产生会话后，Agent 会自动维护上下文。</div>
+          ) : (
+            <div className="agent-grid">
+              <AgentMemoryBlock title="短期上下文" items={agentMemory.short_term_context} />
+              <AgentMemoryBlock title="客户痛点" items={agentMemory.pain_points} />
+              <AgentMemoryBlock title="风险/异议" items={agentMemory.risks} />
+              <AgentMemoryBlock title="承诺事项" items={agentMemory.commitments} />
+              <AgentMemoryBlock title="后续待办" items={agentMemory.todos} />
+              <AgentMemoryBlock title="关键问题" items={agentMemory.questions} />
+              <div className="agent-memory-block decisions-block">
+                <h3>决策日志</h3>
+                {agentMemory.decisions.length === 0 && <p className="empty">暂无决策日志</p>}
+                {agentMemory.decisions.slice(-8).reverse().map((decision) => (
+                  <div className="decision-item" key={decision.id}>
+                    <strong>{decision.type}</strong>
+                    <span>{decision.reason}</span>
+                    <p>{decision.speaker_name}: {decision.content}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
 
         <section className="page-card summary-card">
           <div className="section-heading">

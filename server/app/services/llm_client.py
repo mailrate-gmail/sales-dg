@@ -1,17 +1,128 @@
+from time import perf_counter
+from typing import Any
+
 import httpx
 
+from app.models import ModelConfig
 from app.services.runtime_config import runtime_config
 
 
 class LLMClient:
+    def api_url(self, config: ModelConfig) -> str:
+        base = config.llm_base_url.rstrip("/")
+        if config.llm_api_type == "responses":
+            return base + "/v1/responses"
+        return base + "/v1/chat/completions"
+
+    def headers(self, config: ModelConfig) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {config.llm_api_key}",
+            "Content-Type": "application/json",
+        }
+
+    def response_text(self, data: dict[str, Any]) -> str:
+        if isinstance(data.get("output_text"), str):
+            return data["output_text"].strip()
+
+        output = data.get("output")
+        if isinstance(output, list):
+            parts: list[str] = []
+            for item in output:
+                content = item.get("content") if isinstance(item, dict) else None
+                if not isinstance(content, list):
+                    continue
+                for content_item in content:
+                    if not isinstance(content_item, dict):
+                        continue
+                    text = content_item.get("text")
+                    if isinstance(text, str):
+                        parts.append(text)
+            if parts:
+                return "".join(parts).strip()
+
+        choices = data.get("choices")
+        if isinstance(choices, list) and choices:
+            message = choices[0].get("message", {})
+            content = message.get("content", "") if isinstance(message, dict) else ""
+            if isinstance(content, str):
+                return content.strip()
+
+        return ""
+
+    async def complete(self, config: ModelConfig, system_prompt: str, user_prompt: str, max_tokens: int | None = None) -> str:
+        if not config.llm_api_key:
+            raise ValueError("未配置 LLM_API_KEY。")
+
+        if config.llm_api_type == "responses":
+            payload: dict[str, Any] = {
+                "model": config.llm_model,
+                "instructions": system_prompt,
+                "input": user_prompt,
+            }
+            if max_tokens:
+                payload["max_output_tokens"] = max_tokens
+        else:
+            payload = {
+                "model": config.llm_model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+            }
+            if max_tokens:
+                payload["max_tokens"] = max_tokens
+
+        async with httpx.AsyncClient(timeout=config.llm_timeout_seconds) as client:
+            response = await client.post(self.api_url(config), headers=self.headers(config), json=payload)
+            response.raise_for_status()
+            return self.response_text(response.json())
+
+    async def test_connection(self, config: ModelConfig) -> dict:
+        if not config.llm_api_key:
+            return {
+                "ok": False,
+                "provider": config.llm_provider,
+                "model": config.llm_model,
+                "message": "未配置 API Key。",
+                "latency_ms": 0,
+            }
+
+        started_at = perf_counter()
+        try:
+            content = await self.complete(config, "你是连接测试助手。", "请只回复 OK。", max_tokens=16)
+            latency_ms = int((perf_counter() - started_at) * 1000)
+            return {
+                "ok": True,
+                "provider": config.llm_provider,
+                "model": config.llm_model,
+                "message": content or "连接成功。",
+                "latency_ms": latency_ms,
+            }
+        except httpx.HTTPStatusError as exc:
+            latency_ms = int((perf_counter() - started_at) * 1000)
+            return {
+                "ok": False,
+                "provider": config.llm_provider,
+                "model": config.llm_model,
+                "message": f"HTTP {exc.response.status_code}: {exc.response.text[:360]}",
+                "latency_ms": latency_ms,
+            }
+        except Exception as exc:
+            latency_ms = int((perf_counter() - started_at) * 1000)
+            return {
+                "ok": False,
+                "provider": config.llm_provider,
+                "model": config.llm_model,
+                "message": str(exc),
+                "latency_ms": latency_ms,
+            }
+
     async def suggest_reply(self, meeting_goal: str, conversation_history: str, latest_customer_message: str) -> str:
         config = runtime_config.get()
         if not config.llm_api_key:
             return "未配置 LLM_API_KEY，无法生成 AI 建议回复。"
 
         prompt = f"""
-你是我的商务会谈辅助助手。
-
 本次会晤目标是：
 {meeting_goal}
 
@@ -32,25 +143,7 @@ class LLMClient:
 6. 输出不超过 150 字。
 """.strip()
 
-        url = config.llm_base_url.rstrip("/") + "/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {config.llm_api_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": config.llm_model,
-            "messages": [
-                {"role": "system", "content": "你是专业的商务会谈辅助助手。"},
-                {"role": "user", "content": prompt},
-            ],
-            "temperature": 0.4,
-        }
-
-        async with httpx.AsyncClient(timeout=config.llm_timeout_seconds) as client:
-            response = await client.post(url, headers=headers, json=payload)
-            response.raise_for_status()
-            data = response.json()
-            return data["choices"][0]["message"]["content"].strip()
+        return await self.complete(config, "你是专业的商务会谈辅助助手。", prompt)
 
     async def summarize(self, meeting_goal: str, conversation_history: str) -> str:
         config = runtime_config.get()
@@ -74,25 +167,7 @@ class LLMClient:
 5. 风险与注意事项
 """.strip()
 
-        url = config.llm_base_url.rstrip("/") + "/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {config.llm_api_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": config.llm_model,
-            "messages": [
-                {"role": "system", "content": "你是专业的商务会后纪要助手。"},
-                {"role": "user", "content": prompt},
-            ],
-            "temperature": 0.3,
-        }
-
-        async with httpx.AsyncClient(timeout=config.llm_timeout_seconds) as client:
-            response = await client.post(url, headers=headers, json=payload)
-            response.raise_for_status()
-            data = response.json()
-            return data["choices"][0]["message"]["content"].strip()
+        return await self.complete(config, "你是专业的商务会后纪要助手。", prompt)
 
 
 llm_client = LLMClient()

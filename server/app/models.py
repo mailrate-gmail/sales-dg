@@ -3,6 +3,16 @@ from pydantic import BaseModel, Field
 
 
 Role = Literal["self", "customer", "other", "unknown"]
+LLMApiType = Literal["chat_completions", "responses"]
+AgentActionType = Literal[
+    "suggest_reply",
+    "extract_pain_point",
+    "record_commitment",
+    "record_todo",
+    "mark_risk",
+    "capture_question",
+    "ignore",
+]
 
 
 class Participant(BaseModel):
@@ -54,6 +64,34 @@ class Session(BaseModel):
     ended_at: Optional[str] = None
     messages: list[Message] = Field(default_factory=list)
     summary: Optional[str] = None
+
+
+class AgentDecision(BaseModel):
+    id: str
+    type: AgentActionType
+    reason: str
+    content: str
+    message_id: Optional[str] = None
+    speaker_name: str = "未知说话人"
+    created_at: str
+
+
+class AgentMemory(BaseModel):
+    meeting_id: str
+    goal: str = ""
+    short_term_context: list[str] = Field(default_factory=list)
+    pain_points: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    commitments: list[str] = Field(default_factory=list)
+    todos: list[str] = Field(default_factory=list)
+    questions: list[str] = Field(default_factory=list)
+    decisions: list[AgentDecision] = Field(default_factory=list)
+    updated_at: str = ""
+
+
+class AgentRunResponse(BaseModel):
+    memory: AgentMemory
+    actions: list[AgentDecision] = Field(default_factory=list)
 
 
 class SessionCreate(BaseModel):
@@ -108,12 +146,31 @@ class ExportResponse(BaseModel):
     file: str
 
 
+class CustomModelConfig(BaseModel):
+    id: str
+    name: str
+    model: str
+    base_url: str
+    api_type: LLMApiType = "chat_completions"
+    description: str = "用户自定义模型"
+
+
 class ModelConfig(BaseModel):
     llm_provider: str = "deepseek"
     llm_model: str = "deepseek-chat"
     llm_base_url: str = "https://api.deepseek.com"
     llm_api_key: str = ""
+    llm_api_type: LLMApiType = "chat_completions"
     llm_timeout_seconds: int = 30
+    model_availability: dict[str, bool] = Field(
+        default_factory=lambda: {
+            "deepseek": True,
+            "gpt": False,
+            "qwen": False,
+            "grok": False,
+        }
+    )
+    custom_models: list[CustomModelConfig] = Field(default_factory=list)
     whisper_model: str = "small"
     whisper_device: str = "cpu"
     whisper_compute_type: str = "int8"
@@ -125,3 +182,11 @@ class ModelConfig(BaseModel):
 
 class SummaryResponse(BaseModel):
     summary: str
+
+
+class ConnectionTestResponse(BaseModel):
+    ok: bool
+    provider: str
+    model: str
+    message: str
+    latency_ms: int = 0
