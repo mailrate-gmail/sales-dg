@@ -1,0 +1,49 @@
+<svg width="1200" height="760" viewBox="0 0 1200 760" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="760" rx="24" fill="#101418"/>
+  <text x="48" y="62" fill="#E8EDF2" font-family="Arial, sans-serif" font-size="34" font-weight="700">AI 会谈辅助系统 - 演示流程</text>
+  <text x="48" y="96" fill="#94A3B8" font-family="Arial, sans-serif" font-size="18">本地 ASR + 声纹识别 + LLM 建议 + 会后总结</text>
+
+  <rect x="48" y="130" width="1104" height="108" rx="16" fill="#151B23" stroke="#263241"/>
+  <text x="78" y="168" fill="#E8EDF2" font-family="Arial, sans-serif" font-size="22" font-weight="700">1. 会晤目标</text>
+  <rect x="78" y="188" width="740" height="28" rx="8" fill="#17202A" stroke="#334155"/>
+  <text x="94" y="208" fill="#CBD5E1" font-family="Arial, sans-serif" font-size="15">了解客户当前业务痛点，并推动下一次需求调研。</text>
+  <rect x="842" y="183" width="126" height="38" rx="8" fill="#3B82F6"/>
+  <text x="872" y="208" fill="white" font-family="Arial, sans-serif" font-size="16">新建会谈</text>
+
+  <rect x="48" y="262" width="520" height="180" rx="16" fill="#151B23" stroke="#263241"/>
+  <text x="78" y="302" fill="#E8EDF2" font-family="Arial, sans-serif" font-size="22" font-weight="700">2. 参会人和声纹</text>
+  <rect x="78" y="326" width="430" height="42" rx="10" fill="#0F1720"/>
+  <text x="98" y="353" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="16">张客户 · 客户 · 需要答复 · 已录声纹</text>
+  <rect x="78" y="380" width="430" height="42" rx="10" fill="#0F1720"/>
+  <text x="98" y="407" fill="#FDE047" font-family="Arial, sans-serif" font-size="16">李销售 · 我方 · 无需答复 · 已录声纹</text>
+
+  <rect x="592" y="262" width="560" height="180" rx="16" fill="#151B23" stroke="#263241"/>
+  <text x="622" y="302" fill="#E8EDF2" font-family="Arial, sans-serif" font-size="22" font-weight="700">3. 模型配置</text>
+  <rect x="622" y="326" width="232" height="34" rx="8" fill="#17202A" stroke="#334155"/>
+  <text x="638" y="349" fill="#CBD5E1" font-family="Arial, sans-serif" font-size="15">LLM: deepseek-chat</text>
+  <rect x="876" y="326" width="232" height="34" rx="8" fill="#17202A" stroke="#334155"/>
+  <text x="892" y="349" fill="#CBD5E1" font-family="Arial, sans-serif" font-size="15">Whisper: small / cpu</text>
+  <rect x="622" y="376" width="232" height="34" rx="8" fill="#17202A" stroke="#334155"/>
+  <text x="638" y="399" fill="#CBD5E1" font-family="Arial, sans-serif" font-size="15">能量阈值: 0.02</text>
+  <rect x="876" y="376" width="232" height="34" rx="8" fill="#17202A" stroke="#334155"/>
+  <text x="892" y="399" fill="#CBD5E1" font-family="Arial, sans-serif" font-size="15">静音切分: 800ms</text>
+
+  <rect x="48" y="466" width="704" height="238" rx="16" fill="#151B23" stroke="#263241"/>
+  <text x="78" y="506" fill="#E8EDF2" font-family="Arial, sans-serif" font-size="22" font-weight="700">4. 实时会话 / 能量检测切分</text>
+  <rect x="78" y="526" width="116" height="36" rx="8" fill="#3B82F6"/>
+  <text x="104" y="550" fill="white" font-family="Arial, sans-serif" font-size="15">开始录音</text>
+  <text x="214" y="550" fill="#94A3B8" font-family="Arial, sans-serif" font-size="15">当前能量：0.0352 / 阈值：0.02</text>
+  <rect x="78" y="584" width="612" height="42" rx="10" fill="#0B1117"/>
+  <text x="98" y="611" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="16">张客户：我们目前最大问题是线索跟进不及时。</text>
+  <rect x="78" y="640" width="612" height="42" rx="10" fill="#0B1117"/>
+  <text x="98" y="667" fill="#FDE047" font-family="Arial, sans-serif" font-size="16">李销售：我先记录下来，稍后确认流程节点。</text>
+
+  <rect x="780" y="466" width="372" height="238" rx="16" fill="#151B23" stroke="#263241"/>
+  <text x="810" y="506" fill="#E8EDF2" font-family="Arial, sans-serif" font-size="22" font-weight="700">5. AI 建议与会后总结</text>
+  <rect x="810" y="528" width="312" height="64" rx="10" fill="#0B1117"/>
+  <text x="828" y="554" fill="#DBEAFE" font-family="Arial, sans-serif" font-size="15">建议：先回应跟进效率问题，</text>
+  <text x="828" y="578" fill="#DBEAFE" font-family="Arial, sans-serif" font-size="15">再推进下一步需求调研。</text>
+  <rect x="810" y="614" width="312" height="64" rx="10" fill="#0B1117"/>
+  <text x="828" y="640" fill="#DBEAFE" font-family="Arial, sans-serif" font-size="15">总结：痛点、承诺事项、</text>
+  <text x="828" y="664" fill="#DBEAFE" font-family="Arial, sans-serif" font-size="15">行动计划和风险提醒。</text>
+</svg>

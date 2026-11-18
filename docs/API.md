@@ -1,0 +1,495 @@
+# API 接口文档
+
+本文档描述 AI 会谈辅助系统后端主要业务 API。默认服务地址：
+
+```text
+http://localhost:8000
+```
+
+所有 JSON 接口默认使用：
+
+```http
+Content-Type: application/json
+```
+
+音频上传接口使用：
+
+```http
+Content-Type: multipart/form-data
+```
+
+## 1. 通用约定
+
+### 1.1 角色枚举
+
+| 值 | 含义 |
+| --- | --- |
+| `self` | 我方 |
+| `customer` | 客户 |
+| `other` | 其他 |
+| `unknown` | 未知 |
+
+### 1.2 错误格式
+
+FastAPI 默认错误格式：
+
+```json
+{
+  "detail": "错误说明"
+}
+```
+
+常见状态码：
+
+| 状态码 | 含义 |
+| --- | --- |
+| `400` | 请求内容不满足业务要求，例如无有效语音 |
+| `404` | 会议、消息、参会人或识别个体不存在 |
+| `422` | 请求参数格式错误 |
+| `500` | 服务端异常或外部模型服务异常 |
+
+## 2. 健康检查
+
+### GET `/api/health`
+
+用于检查后端服务是否可用。
+
+**响应示例**
+
+```json
+{
+  "status": "ok"
+}
+```
+
+## 3. 会议业务 API
+
+推荐新业务优先使用 `/api/meetings` 系列接口。旧的 `/api/sessions` 接口仍保留兼容。
+
+### 3.1 新建会议
+
+### POST `/api/meetings`
+
+创建一场会议。前端只需要传客户名称和会晤目标，开始时间由后端自动生成。
+
+**请求体**
+
+```json
+{
+  "customer_name": "上海某某科技有限公司",
+  "goal": "了解客户当前业务痛点，并推动下一次需求调研。"
+}
+```
+
+**响应示例**
+
+```json
+{
+  "id": "session_20261118_103000_a1b2c3",
+  "title": "上海某某科技有限公司会谈",
+  "goal": "了解客户当前业务痛点，并推动下一次需求调研。",
+  "started_at": "2026-11-18T10:30:00",
+  "ended_at": null,
+  "messages": [],
+  "summary": null
+}
+```
+
+### 3.2 查询会议列表
+
+### GET `/api/meetings`
+
+查询本地历史会议列表。
+
+**响应示例**
+
+```json
+[
+  {
+    "id": "session_20261118_103000_a1b2c3",
+    "title": "上海某某科技有限公司会谈",
+    "goal": "了解客户当前业务痛点，并推动下一次需求调研。",
+    "started_at": "2026-11-18T10:30:00",
+    "ended_at": null,
+    "message_count": 12,
+    "has_summary": true
+  }
+]
+```
+
+### 3.3 查询会议详情
+
+### GET `/api/meetings/{meeting_id}`
+
+获取指定会议的完整信息，包括实时会话消息和会议总结。
+
+**路径参数**
+
+| 参数 | 类型 | 说明 |
+| --- | --- | --- |
+| `meeting_id` | string | 会议 ID |
+
+**响应示例**
+
+```json
+{
+  "id": "session_20261118_103000_a1b2c3",
+  "title": "上海某某科技有限公司会谈",
+  "goal": "了解客户当前业务痛点，并推动下一次需求调研。",
+  "started_at": "2026-11-18T10:30:00",
+  "ended_at": null,
+  "messages": [
+    {
+      "id": "message_1234567890",
+      "session_id": "session_20261118_103000_a1b2c3",
+      "participant_id": null,
+      "speaker_identity_id": "voice_ab12cd34",
+      "speaker_name": "张经理",
+      "role": "customer",
+      "text": "我们现在主要问题是线索跟进不及时。",
+      "audio_file": "/app/data/audio/session_.../message_1234567890.wav",
+      "speaker_score": 0.63,
+      "need_reply": true,
+      "ai_suggestion": null,
+      "created_at": "2026-11-18T10:31:05",
+      "corrected": true
+    }
+  ],
+  "summary": null
+}
+```
+
+### 3.4 上传会议音频片段并处理
+
+### POST `/api/meetings/{meeting_id}/audio`
+
+上传一段前端切分后的音频片段。后端会完成：
+
+1. 音频转 WAV；
+2. Whisper 转写；
+3. 声纹识别；
+4. 写入会议消息；
+5. 如该说话人需要 AI 回复，则生成建议回复。
+
+**请求类型**
+
+```http
+multipart/form-data
+```
+
+**表单字段**
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `file` | file | 是 | 音频片段，推荐 webm |
+
+**curl 示例**
+
+```bash
+curl -X POST \
+  -F "file=@speech.webm" \
+  http://localhost:8000/api/meetings/session_20261118_103000_a1b2c3/audio
+```
+
+**响应示例**
+
+```json
+{
+  "id": "message_1234567890",
+  "session_id": "session_20261118_103000_a1b2c3",
+  "participant_id": null,
+  "speaker_identity_id": "voice_ab12cd34",
+  "speaker_name": "未知说话人",
+  "role": "unknown",
+  "text": "我们现在主要问题是线索跟进不及时。",
+  "audio_file": "/app/data/audio/session_.../message_1234567890.wav",
+  "speaker_score": 0.63,
+  "need_reply": false,
+  "ai_suggestion": null,
+  "created_at": "2026-11-18T10:31:05",
+  "corrected": false
+}
+```
+
+### 3.5 绑定识别个体 ID 与参会人员名称
+
+### PUT `/api/meetings/{meeting_id}/speakers/{speaker_identity_id}`
+
+将会议室里动态识别到的某个个体 ID 与人工输入的参会人员名称关联。该接口会批量更新当前会议中相同 `speaker_identity_id` 的消息。
+
+> 注意：只有已经发言并被识别到的个体才会有 `speaker_identity_id`。未发言人员不会出现在会议室关联表中。
+
+**路径参数**
+
+| 参数 | 类型 | 说明 |
+| --- | --- | --- |
+| `meeting_id` | string | 会议 ID |
+| `speaker_identity_id` | string | 识别个体 ID，例如 `voice_ab12cd34` 或已登记声纹的 `participant_xxx` |
+
+**请求体**
+
+```json
+{
+  "speaker_name": "张经理",
+  "role": "customer",
+  "need_reply": true
+}
+```
+
+**响应示例**
+
+```json
+{
+  "speaker_identity_id": "voice_ab12cd34",
+  "speaker_name": "张经理",
+  "updated_count": 3
+}
+```
+
+### 3.6 手动修正单条消息说话人
+
+### PUT `/api/sessions/{session_id}/messages/{message_id}/speaker`
+
+用于精确修正单条消息。该接口属于兼容 API，目前前端仍可用于从已登记声纹参会人中选择修正。
+
+**请求体：绑定到已登记参会人**
+
+```json
+{
+  "participant_id": "participant_ab12cd34"
+}
+```
+
+**请求体：只修正名称和角色**
+
+```json
+{
+  "speaker_name": "张经理",
+  "role": "customer"
+}
+```
+
+**响应**
+
+返回修正后的 `Message`。
+
+### 3.7 结束会议
+
+### POST `/api/meetings/{meeting_id}/end`
+
+设置会议结束时间。结束时间由后端自动生成；重复调用不会覆盖已有结束时间。
+
+**响应**
+
+返回更新后的会议详情。
+
+### 3.8 生成会议总结
+
+### POST `/api/meetings/{meeting_id}/summary`
+
+人工触发生成会议总结。系统不会自动生成总结。
+
+**响应示例**
+
+```json
+{
+  "summary": "1. 会谈概况\n...\n2. 客户关键诉求/痛点\n..."
+}
+```
+
+### 3.9 导出会议 Markdown
+
+### POST `/api/meetings/{meeting_id}/export`
+
+导出会议记录到本地 Markdown 文件。
+
+**响应示例**
+
+```json
+{
+  "file": "/app/data/exports/session_20261118_103000_a1b2c3.md"
+}
+```
+
+## 4. 参会人和声纹 API
+
+参会人 API 用于维护已知参会人和声纹样本。会议室中的“识别个体 ID 关联”是动态的，不要求提前创建参会人。
+
+### 4.1 查询参会人列表
+
+### GET `/api/participants`
+
+**响应示例**
+
+```json
+[
+  {
+    "id": "participant_ab12cd34",
+    "name": "李销售",
+    "role": "self",
+    "need_reply": false,
+    "display_color": "yellow",
+    "voiceprint_file": "/app/data/participants/participant_ab12cd34.embedding.npy",
+    "sample_audio_file": "/app/data/participants/participant_ab12cd34_sample.wav",
+    "remark": ""
+  }
+]
+```
+
+### 4.2 创建参会人
+
+### POST `/api/participants`
+
+**请求体**
+
+```json
+{
+  "name": "李销售",
+  "role": "self",
+  "need_reply": false,
+  "remark": "我方销售负责人"
+}
+```
+
+### 4.3 更新参会人
+
+### PUT `/api/participants/{participant_id}`
+
+**请求体**
+
+```json
+{
+  "name": "李销售",
+  "role": "self",
+  "need_reply": false,
+  "remark": "更新后的备注"
+}
+```
+
+字段均可选。
+
+### 4.4 上传声纹样本
+
+### POST `/api/participants/{participant_id}/voiceprint`
+
+上传参会人的声纹样本。后端会转 WAV 并生成声纹 embedding。
+
+**请求类型**
+
+```http
+multipart/form-data
+```
+
+**表单字段**
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `file` | file | 是 | 声纹样本音频，推荐 10 秒左右 webm |
+
+**curl 示例**
+
+```bash
+curl -X POST \
+  -F "file=@voiceprint.webm" \
+  http://localhost:8000/api/participants/participant_ab12cd34/voiceprint
+```
+
+## 5. AI API
+
+### 5.1 独立生成建议回复
+
+### POST `/api/ai/suggest-reply`
+
+不依赖会议消息存储，直接根据传入文本生成建议回复。
+
+**请求体**
+
+```json
+{
+  "meeting_goal": "推动下一次需求调研",
+  "conversation_history": "张经理：我们线索跟进不及时。",
+  "latest_customer_message": "这个问题影响了销售转化。"
+}
+```
+
+**响应示例**
+
+```json
+{
+  "suggestion": "我理解这个问题会直接影响销售转化。我们可以先梳理线索流转节点，再确认哪些环节最容易延迟。"
+}
+```
+
+## 6. 系统配置 API
+
+### 6.1 查询模型配置
+
+### GET `/api/config`
+
+**响应示例**
+
+```json
+{
+  "llm_provider": "deepseek",
+  "llm_model": "deepseek-chat",
+  "llm_base_url": "https://api.deepseek.com",
+  "llm_api_key": "",
+  "llm_timeout_seconds": 30,
+  "whisper_model": "small",
+  "whisper_device": "cpu",
+  "whisper_compute_type": "int8",
+  "speaker_threshold": 0.7,
+  "energy_threshold": 0.02,
+  "silence_duration_ms": 800,
+  "min_speech_duration_ms": 1000
+}
+```
+
+### 6.2 更新模型配置
+
+### PUT `/api/config`
+
+**请求体**
+
+传完整配置对象，字段同上。
+
+**响应**
+
+返回保存后的完整配置。配置会持久化到：
+
+```text
+data/model_config.json
+```
+
+## 7. 兼容接口
+
+以下接口保留以兼容早期前端或外部调用方：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `POST` | `/api/sessions` | 创建会话，等价于早期会议创建 |
+| `GET` | `/api/sessions` | 查询会话列表 |
+| `GET` | `/api/sessions/{session_id}` | 查询会话详情 |
+| `POST` | `/api/audio/process` | 上传音频片段；表单需包含 `session_id` 和 `file` |
+| `POST` | `/api/sessions/{session_id}/summary` | 生成会后总结 |
+| `POST` | `/api/sessions/{session_id}/export` | 导出会话 Markdown |
+| `PUT` | `/api/sessions/{session_id}/messages/{message_id}/speaker` | 修正单条消息说话人 |
+
+## 8. 典型业务调用流程
+
+### 8.1 新会议实时辅助流程
+
+1. `POST /api/meetings` 创建会议；
+2. 前端浏览器采集音频并按能量切分；
+3. 每个音频片段调用 `POST /api/meetings/{meeting_id}/audio`；
+4. 前端展示返回的 `speaker_identity_id`、转写文本和 AI 建议；
+5. 用户输入参会人名称后调用 `PUT /api/meetings/{meeting_id}/speakers/{speaker_identity_id}`；
+6. 会议结束后人工点击，调用 `POST /api/meetings/{meeting_id}/summary`；
+7. 需要保存时调用 `POST /api/meetings/{meeting_id}/export`。
+
+### 8.2 已知声纹参会人流程
+
+1. `POST /api/participants` 创建参会人；
+2. `POST /api/participants/{participant_id}/voiceprint` 上传声纹样本；
+3. 会议音频处理时，后端会尝试匹配该参会人的声纹；
+4. 如果匹配成功，消息中的 `participant_id` 与 `speaker_identity_id` 会使用该参会人 ID。

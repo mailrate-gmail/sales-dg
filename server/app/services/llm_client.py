@@ -1,11 +1,12 @@
 import httpx
 
-from app.config import settings
+from app.services.runtime_config import runtime_config
 
 
 class LLMClient:
     async def suggest_reply(self, meeting_goal: str, conversation_history: str, latest_customer_message: str) -> str:
-        if not settings.llm_api_key:
+        config = runtime_config.get()
+        if not config.llm_api_key:
             return "未配置 LLM_API_KEY，无法生成 AI 建议回复。"
 
         prompt = f"""
@@ -31,13 +32,13 @@ class LLMClient:
 6. 输出不超过 150 字。
 """.strip()
 
-        url = settings.llm_base_url.rstrip("/") + "/v1/chat/completions"
+        url = config.llm_base_url.rstrip("/") + "/v1/chat/completions"
         headers = {
-            "Authorization": f"Bearer {settings.llm_api_key}",
+            "Authorization": f"Bearer {config.llm_api_key}",
             "Content-Type": "application/json",
         }
         payload = {
-            "model": settings.llm_model,
+            "model": config.llm_model,
             "messages": [
                 {"role": "system", "content": "你是专业的商务会谈辅助助手。"},
                 {"role": "user", "content": prompt},
@@ -45,7 +46,49 @@ class LLMClient:
             "temperature": 0.4,
         }
 
-        async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
+        async with httpx.AsyncClient(timeout=config.llm_timeout_seconds) as client:
+            response = await client.post(url, headers=headers, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            return data["choices"][0]["message"]["content"].strip()
+
+    async def summarize(self, meeting_goal: str, conversation_history: str) -> str:
+        config = runtime_config.get()
+        if not config.llm_api_key:
+            return "未配置 LLM_API_KEY，无法生成会后总结。"
+
+        prompt = f"""
+请基于以下商务会谈记录生成会后总结。
+
+会晤目标：
+{meeting_goal}
+
+会话记录：
+{conversation_history}
+
+请按以下结构输出：
+1. 会谈概况
+2. 客户关键诉求/痛点
+3. 我方承诺与待确认事项
+4. 后续行动计划
+5. 风险与注意事项
+""".strip()
+
+        url = config.llm_base_url.rstrip("/") + "/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {config.llm_api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": config.llm_model,
+            "messages": [
+                {"role": "system", "content": "你是专业的商务会后纪要助手。"},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0.3,
+        }
+
+        async with httpx.AsyncClient(timeout=config.llm_timeout_seconds) as client:
             response = await client.post(url, headers=headers, json=payload)
             response.raise_for_status()
             data = response.json()

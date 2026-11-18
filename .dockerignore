@@ -1,0 +1,8 @@
+.git
+.github
+data
+client/node_modules
+client/dist
+server/app/__pycache__
+server/app/services/__pycache__
+**/*.pyc

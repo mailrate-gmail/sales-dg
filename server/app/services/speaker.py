@@ -6,8 +6,8 @@ import numpy as np
 import torch
 from speechbrain.inference.speaker import EncoderClassifier
 
-from app.config import settings
 from app.models import Participant
+from app.services.runtime_config import runtime_config
 
 
 @lru_cache(maxsize=1)
@@ -43,7 +43,7 @@ class SpeakerService:
                 best_score = score
                 best_participant = participant
 
-        if best_score < settings.speaker_threshold:
+        if best_score < runtime_config.get().speaker_threshold:
             return None, float(best_score)
 
         return best_participant, float(best_score)
