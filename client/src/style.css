@@ -1,0 +1,161 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #101418;
+  color: #e8edf2;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+button, input, select, textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 14px;
+  background: #3b82f6;
+  color: white;
+}
+
+input, select, textarea {
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 8px;
+  background: #17202a;
+  color: #e8edf2;
+}
+
+textarea {
+  width: 100%;
+  min-height: 70px;
+  resize: vertical;
+}
+
+.page {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+header {
+  margin-bottom: 20px;
+}
+
+header h1 {
+  margin: 0 0 8px;
+}
+
+header p {
+  margin: 0;
+  color: #94a3b8;
+}
+
+.panel, .conversation, .suggestion {
+  background: #151b23;
+  border: 1px solid #263241;
+  border-radius: 16px;
+  padding: 18px;
+  margin-bottom: 16px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.session {
+  margin-left: 12px;
+  color: #94a3b8;
+}
+
+.participants {
+  margin-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.participant {
+  display: grid;
+  grid-template-columns: 1fr 100px 100px 100px 100px;
+  gap: 8px;
+  align-items: center;
+  padding: 10px;
+  background: #0f1720;
+  border-radius: 10px;
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 16px;
+}
+
+.toolbar {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.messages {
+  min-height: 360px;
+  max-height: 520px;
+  overflow: auto;
+  background: #0b1117;
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.message {
+  padding: 12px;
+  border-bottom: 1px solid #1f2937;
+}
+
+.message p {
+  margin: 8px 0 0;
+  line-height: 1.6;
+}
+
+.message.customer {
+  color: white;
+}
+
+.message.self {
+  color: #fde047;
+}
+
+.message.other,
+.message.unknown {
+  color: #94a3b8;
+}
+
+.score {
+  margin-left: 10px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.suggestion p {
+  line-height: 1.8;
+  color: #dbeafe;
+  background: #0b1117;
+  border-radius: 12px;
+  padding: 14px;
+  min-height: 180px;
+}
+
+@media (max-width: 900px) {
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .participant {
+    grid-template-columns: 1fr;
+  }
+}
