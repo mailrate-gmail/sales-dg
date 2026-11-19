@@ -1,0 +1,17 @@
+# 开发环境镜像：只提供运行依赖，不打包源码。
+# 源码通过 docker-compose.yml 的 bind mount 从本机实时映射到 /app/app。
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+EXPOSE 8000
+
+# --reload：本机 app/ 下的代码变更会触发容器内的 FastAPI 自动重启
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/app"]

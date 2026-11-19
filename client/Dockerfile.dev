@@ -1,0 +1,13 @@
+# 开发环境镜像：只提供运行依赖（node_modules），不打包源码。
+# 源码通过 docker-compose.yml 的 bind mount 从本机实时映射到 /app。
+FROM node:20-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm install
+
+EXPOSE 3000
+
+# Vite dev server 通过 bind mount 读取本机源码，文件变更由 HMR 自动刷新
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]

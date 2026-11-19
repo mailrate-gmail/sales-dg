@@ -1,21 +1,40 @@
 services:
   server:
-    build: ./server
+    build:
+      context: ./server
+      dockerfile: Dockerfile.dev
     container_name: ai-meeting-assistant-server
     ports:
       - "8000:8000"
     volumes:
+      # 源码从本机实时挂载，改代码无需重建镜像
+      - ./server/app:/app/app
+      # 测试代码同样实时挂载，便于在容器内直接运行 unittest
+      - ./server/tests:/app/tests
+      # 数据与模型缓存持久化
       - ./data:/app/data
+      - ./model_cache:/root/.cache/modelscope
+      - ./hf_cache:/root/.cache/huggingface
     env_file:
       - path: .env
         required: false
 
   client:
-    build: ./client
+    build:
+      context: ./client
+      dockerfile: Dockerfile.dev
     container_name: ai-meeting-assistant-client
     ports:
       - "3000:3000"
     depends_on:
       - server
+    volumes:
+      # 仅挂载源码与配置，node_modules 由镜像内的 npm install 提供
+      - ./client/src:/app/src
+      - ./client/index.html:/app/index.html
+      - ./client/vite.config.ts:/app/vite.config.ts
+      - ./client/tsconfig.json:/app/tsconfig.json
+      # 匿名卷保护镜像内已安装的依赖，避免被本机目录覆盖
+      - /app/node_modules
     environment:
       - VITE_API_PROXY_TARGET=http://server:8000
