@@ -34,5 +34,11 @@ jobs:
       - name: Compile Python sources
         working-directory: server
         run: python -m compileall app
+      - name: Install test dependencies
+        working-directory: server
+        run: pip install -r requirements-test.txt
+      - name: Run unit tests
+        working-directory: server
+        run: python -m unittest discover -s tests -t . -v
       - name: Validate Docker Compose
         run: docker compose config
