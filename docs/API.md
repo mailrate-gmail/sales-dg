@@ -152,12 +152,17 @@ FastAPI 默认错误格式：
       "need_reply": true,
       "ai_suggestion": null,
       "created_at": "2026-11-18T10:31:05",
-      "corrected": true
+      "corrected": true,
+      "utterance_labels": ["question", "pain_point"],
+      "should_reply": true,
+      "analysis_reason": "识别为问题或明确请求，触发 AI 建议回复"
     }
   ],
   "summary": null
 }
 ```
+
+> **AI 回复过滤**：`need_reply` 表示发言人被指定为“需要答复”，`should_reply` 表示本地规则判定这条发言是问题/明确请求。只有两者都为 `true` 时才会调用远程 LLM 生成 `ai_suggestion`。说明、示例、解释等内容（`context_note`）会有 `need_reply=true` 但 `should_reply=false`，`ai_suggestion` 为 `null`，不会出现在 AI Q&A 区，但其文本会写入 Agent 记忆的 `context_notes` / `key_facts`，供后续回复与总结参考。`utterance_labels` 与 `analysis_reason` 用于追溯过滤依据。
 
 ### 3.4 上传会议音频片段并处理
 
@@ -321,7 +326,7 @@ curl -X POST \
 
 ### GET `/api/meetings/{meeting_id}/agent/memory`
 
-返回当前会议的 Agent 记忆，包括短期上下文、客户痛点、风险、承诺、待办、问题和决策日志。
+返回当前会议的 Agent 记忆，包括短期上下文、本地归纳的背景说明与关键事实、客户痛点、风险、承诺、待办、问题和决策日志。
 
 **响应示例**
 
@@ -330,6 +335,8 @@ curl -X POST \
   "meeting_id": "session_20261118_103000_a1b2c3",
   "goal": "了解客户当前业务痛点，并推动下一次需求调研。",
   "short_term_context": ["张经理: 我们线索跟进不及时。"],
+  "context_notes": ["张经理: 比如我们现在线索是通过邮件同步的。"],
+  "key_facts": ["张经理: 我们目前已经接入了三家客户。"],
   "pain_points": ["张经理: 我们线索跟进不及时。"],
   "risks": [],
   "commitments": [],
