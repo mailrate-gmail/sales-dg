@@ -539,13 +539,16 @@ curl -X POST \
   "speaker_threshold": 0.3,
   "energy_threshold": 0.008,
   "silence_duration_ms": 800,
-  "min_speech_duration_ms": 1000
+  "min_speech_duration_ms": 1000,
+  "punctuation_sensitivity": 0.6
 }
 ```
 
 > **API Key 安全**：`GET /api/config` 对已保存的 `llm_api_key` 仅返回掩码 `__MASKED__`；`PUT /api/config` 收到该掩码时保留原密钥，输入新值则覆盖，清空则删除。`POST /api/config/test` 同样会先将掩码还原为已保存密钥再测试。
 
 > **ASR 后端选择**：`asr_provider` 控制短音频上传接口（`POST /api/meetings/{id}/audio` 与 `POST /api/audio/process`）使用的引擎：`funasr_streaming`（默认）用本地 FunASR 流式模型整段识别；`faster_whisper` 用本地 faster-whisper 识别并返回带时间戳分段；`oci_speech` 尚未接入，返回 `501`。会议室实时流式 WebSocket 识别固定使用 FunASR，不受该字段影响。
+
+> **标点敏感度**：`punctuation_sensitivity` 范围 `0~1`，默认 `0.6`。数值越高，ASR final 文本越积极地补逗号/句号；会议室界面的滑块会通过 `PUT /api/config` 即时保存，后续 final 文本立即按新强度处理。
 
 ### 7.2 更新模型配置
 

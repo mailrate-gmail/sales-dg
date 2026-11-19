@@ -319,6 +319,19 @@ code {
   font-size: 13px;
 }
 
+.inline-range {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.inline-range input[type="range"] {
+  width: 120px;
+}
+
 .history-list {
   display: grid;
   gap: 12px;

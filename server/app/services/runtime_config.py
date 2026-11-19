@@ -32,6 +32,7 @@ class RuntimeConfigService:
             energy_threshold=settings.energy_threshold,
             silence_duration_ms=settings.silence_duration_ms,
             min_speech_duration_ms=settings.min_speech_duration_ms,
+            punctuation_sensitivity=settings.punctuation_sensitivity,
         )
 
     def get(self) -> ModelConfig:

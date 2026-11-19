@@ -13,6 +13,7 @@
 - 录入参会人声纹样本；
 - 基于浏览器 WebAudio 采集，按语音停顿 0.8s 切分；
 - 本地 FunASR streaming 实时转写（faster-whisper 作为短音频 fallback）；
+- final 文本本地轻量标点恢复，会议室可实时调整“标点敏感度”以控制补标点强度；
 - 本地 SpeechBrain 声纹匹配；
 - 手动修正消息说话人；
 - 页面维护 LLM / Whisper / 声纹阈值 / 能量阈值配置；

@@ -35,6 +35,7 @@ from app.services.config_view import mask_config, unmask_api_key
 from app.services.context_manager import context_manager
 from app.services.funasr_streaming import funasr_streaming_service
 from app.services.llm_client import llm_client
+from app.services.punctuation import restore_punctuation
 from app.services.runtime_config import runtime_config
 from app.services.speaker import speaker_service
 from app.services.storage import storage
@@ -210,12 +211,17 @@ def structured_context_for_session(session: Session) -> str:
     return context_manager.format_context_for_llm(memory)
 
 
+def restore_asr_text(text: str) -> str:
+    return restore_punctuation(text, sensitivity=runtime_config.get().punctuation_sensitivity)
+
+
 async def create_message_from_text_audio(
     session: Session,
     text: str,
     wav_path: Path,
     speaker_identity_id: str | None = None,
 ) -> Message:
+    text = restore_asr_text(text)
     fields = await asyncio.to_thread(collect_speaker_fields, session, wav_path, speaker_identity_id)
     analysis = context_manager.analyze_utterance(text)
 
@@ -276,7 +282,7 @@ async def process_audio_file(session_id: str, file: UploadFile) -> list[Message]
 
     new_messages: list[Message] = []
     for index, segment in enumerate(transcript_segments):
-        text = segment["text"]
+        text = restore_asr_text(segment["text"])
         analysis = context_manager.analyze_utterance(text)
         suggestion = None
         if context_manager.should_trigger_reply(fields["need_reply"], analysis):

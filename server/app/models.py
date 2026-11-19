@@ -212,6 +212,7 @@ class ModelConfig(BaseModel):
     energy_threshold: float = 0.008
     silence_duration_ms: int = 800
     min_speech_duration_ms: int = 1000
+    punctuation_sensitivity: float = Field(default=0.6, ge=0.0, le=1.0)
 
 
 class SummaryResponse(BaseModel):

@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     energy_threshold: float = 0.008
     silence_duration_ms: int = 800
     min_speech_duration_ms: int = 1000
+    punctuation_sensitivity: float = 0.6
 
     llm_provider: str = "deepseek"
     llm_model: str = "deepseek-chat"

@@ -3,6 +3,99 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
 const VOICE_GAP_SPLIT_MS = 800
 const VOICE_ENERGY_TRIGGER = 0.008
+const SENTENCE_END = '。！？!?；;'
+const ANY_PUNCTUATION = '，,。.!！?？；;：:、'
+const QUESTION_MARKERS = ['吗', '呢', '么', '什么', '为什么', '怎么', '如何', '是否', '能否', '能不能', '可不可以', '有没有', '多少', '什么时候', '请问']
+const COMMA_MARKERS = ['但是', '不过', '所以', '因此', '然后', '另外', '同时', '而且', '如果', '其实', '比如', '例如', '也就是说', '一方面', '另一方面', '首先', '其次', '最后']
+const SPLIT_CANDIDATES = ['因为', '所以', '但是', '然后', '另外', '同时', '如果', '我们', '客户', '现在', '目前', '这个', '那个', '可以', '需要', '希望', '已经', '就是', '的话', '的时候', '之后']
+
+function escapeRegExp(text: string) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function hasAnyPunctuation(text: string) {
+  return Array.from(text).some((char) => ANY_PUNCTUATION.includes(char))
+}
+
+function isQuestionLike(text: string) {
+  return text.includes('?') || text.includes('？') || QUESTION_MARKERS.some((marker) => text.includes(marker))
+}
+
+function clampPunctuationSensitivity(value: number | undefined | null) {
+  if (typeof value !== 'number' || Number.isNaN(value)) return 0.6
+  return Math.max(0, Math.min(1, value))
+}
+
+function maxClauseLength(sensitivity: number) {
+  const value = clampPunctuationSensitivity(sensitivity)
+  if (value <= 0.05) return 9999
+  return Math.round(48 - value * 32)
+}
+
+function splitLongPlainClause(text: string, limit: number) {
+  if (text.length <= limit) return text
+  const parts: string[] = []
+  let rest = text
+  while (rest.length > limit) {
+    const start = Math.max(8, limit - 8)
+    const end = Math.min(rest.length, limit + 8)
+    let splitAt = -1
+    for (const marker of SPLIT_CANDIDATES) {
+      const idx = rest.slice(start, end).lastIndexOf(marker)
+      if (idx >= 0 && start + idx > 6) {
+        splitAt = start + idx
+        break
+      }
+    }
+    if (splitAt <= 6) splitAt = limit
+    parts.push(rest.slice(0, splitAt))
+    rest = rest.slice(splitAt)
+  }
+  if (rest) parts.push(rest)
+  return parts.join('，')
+}
+
+function splitLongClauses(text: string, sensitivity: number) {
+  const limit = maxClauseLength(sensitivity)
+  if (limit > 1000) return text
+  let result = ''
+  let current = ''
+  for (const char of Array.from(text)) {
+    if (ANY_PUNCTUATION.includes(char)) {
+      if (current) {
+        result += splitLongPlainClause(current, limit)
+        current = ''
+      }
+      result += char
+    } else {
+      current += char
+    }
+  }
+  if (current) result += splitLongPlainClause(current, limit)
+  return result
+}
+
+function displayTranscriptText(text: string, sensitivity = 0.6) {
+  let value = text.replace(/\s+/g, ' ').trim()
+  if (!value) return ''
+
+  const punctuationSensitivity = clampPunctuationSensitivity(sensitivity)
+  if (punctuationSensitivity > 0.05 && (!hasAnyPunctuation(value) || punctuationSensitivity >= 0.75)) {
+    const activeMarkers = punctuationSensitivity < 0.35 ? ['但是', '不过', '所以', '因此', '然后'] : COMMA_MARKERS
+    for (const marker of activeMarkers) {
+      const pattern = new RegExp(`(?<![${escapeRegExp(ANY_PUNCTUATION)}])(${escapeRegExp(marker)})`, 'g')
+      value = value.replace(pattern, '，$1')
+    }
+    value = value.replace(/^，+/, '')
+  }
+  value = splitLongClauses(value, punctuationSensitivity)
+
+  const last = value[value.length - 1]
+  if (!SENTENCE_END.includes(last)) {
+    value += isQuestionLike(value) ? '？' : '。'
+  }
+  return value
+}
 
 type Role = 'self' | 'customer' | 'other' | 'unknown'
 type Page = 'new' | 'history' | 'settings' | 'room'
@@ -79,6 +172,7 @@ interface ModelConfig {
   energy_threshold: number
   silence_duration_ms: number
   min_speech_duration_ms: number
+  punctuation_sensitivity: number
 }
 
 interface CustomModelConfig {
@@ -169,6 +263,7 @@ const defaultConfig: ModelConfig = {
   energy_threshold: 0.008,
   silence_duration_ms: 800,
   min_speech_duration_ms: 1000,
+  punctuation_sensitivity: 0.6,
 }
 
 const modelPresets: ModelPreset[] = [
@@ -558,7 +653,7 @@ export function App() {
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data)
       if (data.type === 'partial') {
-        setRecordingStatus(`实时字幕：${data.text}`)
+        setRecordingStatus(`实时字幕：${displayTranscriptText(data.text, configRef.current.punctuation_sensitivity)}`)
       } else if (data.type === 'final') {
         const message: Message = data.message
         setMessages((items) => [...items, message])
@@ -957,6 +1052,22 @@ export function App() {
     setConfig((current) => ({ ...current, [key]: value }))
   }
 
+  async function updatePunctuationSensitivity(value: number) {
+    const nextValue = clampPunctuationSensitivity(value)
+    const nextConfig = ensureCurrentModelVisible({ ...config, punctuation_sensitivity: nextValue })
+    setConfig(nextConfig)
+    const res = await fetch(`${API_BASE}/api/config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(nextConfig),
+    })
+    if (res.ok) {
+      setConfig(await res.json())
+    } else {
+      setRecordingStatus('标点敏感度保存失败，请稍后重试')
+    }
+  }
+
   return (
     <div className={menuCollapsed ? 'app-shell menu-collapsed' : 'app-shell'}>
       <aside className="sidebar">
@@ -1223,6 +1334,17 @@ export function App() {
               <h2>实时会话</h2>
               <div className="section-actions">
                 <span>当前能量：{energyLevel.toFixed(4)} / 触发阈值：{Math.min(config.energy_threshold || VOICE_ENERGY_TRIGGER, VOICE_ENERGY_TRIGGER)} / 停顿 {VOICE_GAP_SPLIT_MS / 1000}s 切分</span>
+                <label className="inline-range" title="数值越高，越积极地为长句添加逗号/句号；调整后立即生效">
+                  标点敏感度 {Math.round(clampPunctuationSensitivity(config.punctuation_sensitivity) * 100)}%
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.1"
+                    value={clampPunctuationSensitivity(config.punctuation_sensitivity)}
+                    onChange={(e) => void updatePunctuationSensitivity(Number(e.target.value))}
+                  />
+                </label>
                 <button className="secondary-action" onClick={clearRealtimeConversation}>清空</button>
               </div>
             </div>
@@ -1237,7 +1359,7 @@ export function App() {
                     {typeof message.start_time === 'number' && typeof message.end_time === 'number' && <span className="score">{message.start_time.toFixed(1)}s - {message.end_time.toFixed(1)}s</span>}
                     <span className="score">匹配分：{message.speaker_score?.toFixed(2) ?? '-'}</span>
                   </div>
-                  <p>{message.text}</p>
+                  <p>{displayTranscriptText(message.text, config.punctuation_sensitivity)}</p>
                 </div>
               ))}
             </div>
