@@ -133,19 +133,32 @@ class LLMClient:
                 "latency_ms": latency_ms,
             }
 
-    async def suggest_reply(self, meeting_goal: str, conversation_history: str, latest_customer_message: str) -> str:
+    async def suggest_reply(
+        self,
+        meeting_goal: str,
+        conversation_history: str,
+        latest_customer_message: str,
+        structured_context: str = "",
+    ) -> str:
         config = runtime_config.get()
         if not config.llm_api_key:
             return "未配置 LLM_API_KEY，无法生成 AI 建议回复。"
 
+        context_block = ""
+        if structured_context:
+            context_block = f"""
+本地归纳的结构化上下文（供参考，其中“背景说明”不是客户当前的提问，不要当作问题回应）：
+{structured_context}
+"""
+
         prompt = f"""
 本次会晤目标是：
 {meeting_goal}
-
+{context_block}
 最近会话记录：
 {conversation_history}
 
-客户最新发言：
+客户最新发言（这是需要你回应的问题/请求）：
 {latest_customer_message}
 
 请生成一段适合我回复客户的话术。
@@ -153,25 +166,38 @@ class LLMClient:
 要求：
 1. 语气专业、自然；
 2. 先回应客户关切，再推进会晤目标；
-3. 不要过度承诺；
-4. 不要编造不存在的产品能力；
-5. 如信息不足，请建议进一步追问；
-6. 输出不超过 150 字。
+3. 背景说明只作为上下文参考，不要把它当作客户的新问题；
+4. 不要过度承诺；
+5. 不要编造不存在的产品能力；
+6. 如信息不足，请建议进一步追问；
+7. 输出不超过 150 字。
 """.strip()
 
         return await self.complete(config, "你是专业的商务会谈辅助助手。", prompt)
 
-    async def summarize(self, meeting_goal: str, conversation_history: str) -> str:
+    async def summarize(
+        self,
+        meeting_goal: str,
+        conversation_history: str,
+        structured_context: str = "",
+    ) -> str:
         config = runtime_config.get()
         if not config.llm_api_key:
             return "未配置 LLM_API_KEY，无法生成会后总结。"
+
+        context_block = ""
+        if structured_context:
+            context_block = f"""
+本地归纳的结构化上下文（背景/痛点/风险/承诺/待办，供总结时参考）：
+{structured_context}
+"""
 
         prompt = f"""
 请基于以下商务会谈记录生成会后总结。
 
 会晤目标：
 {meeting_goal}
-
+{context_block}
 会话记录：
 {conversation_history}
 

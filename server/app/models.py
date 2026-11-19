@@ -57,6 +57,10 @@ class Message(BaseModel):
     ai_suggestion: Optional[str] = None
     created_at: str
     corrected: bool = False
+    # 本地会话分析结果（无需本地 LLM），用于追溯 AI 回复过滤依据
+    utterance_labels: list[str] = Field(default_factory=list)
+    should_reply: bool = False
+    analysis_reason: str = ""
 
 
 class Session(BaseModel):
@@ -83,6 +87,9 @@ class AgentMemory(BaseModel):
     meeting_id: str
     goal: str = ""
     short_term_context: list[str] = Field(default_factory=list)
+    # 本地归纳的上下文摘要：说明/示例/解释等内容不触发 AI 回复，但保留供后续参考
+    context_notes: list[str] = Field(default_factory=list)
+    key_facts: list[str] = Field(default_factory=list)
     pain_points: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
     commitments: list[str] = Field(default_factory=list)
@@ -90,6 +97,21 @@ class AgentMemory(BaseModel):
     questions: list[str] = Field(default_factory=list)
     decisions: list[AgentDecision] = Field(default_factory=list)
     updated_at: str = ""
+
+
+class UtteranceAnalysis(BaseModel):
+    """本地规则对单条 ASR 发言的分析结果，不依赖本地 LLM。
+
+    - labels：命中的语义标签（question / context_note / pain_point / risk 等）；
+    - should_reply：是否需要触发 AI 建议回复（仅“问题/明确请求”为真）；
+    - importance：重要度评分，用于排序与上下文裁剪；
+    - reason：可读的判断依据，便于追溯与调试。
+    """
+
+    labels: list[str] = Field(default_factory=list)
+    should_reply: bool = False
+    importance: int = 0
+    reason: str = ""
 
 
 class AgentRunResponse(BaseModel):

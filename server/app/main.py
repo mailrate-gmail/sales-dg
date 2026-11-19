@@ -204,6 +204,12 @@ def collect_speaker_fields(
     }
 
 
+def structured_context_for_session(session: Session) -> str:
+    """从本地 Agent 记忆生成供远程 LLM 使用的结构化上下文。"""
+    memory = context_manager.load_memory(session.id, session.goal)
+    return context_manager.format_context_for_llm(memory)
+
+
 async def create_message_from_text_audio(
     session: Session,
     text: str,
@@ -211,11 +217,19 @@ async def create_message_from_text_audio(
     speaker_identity_id: str | None = None,
 ) -> Message:
     fields = await asyncio.to_thread(collect_speaker_fields, session, wav_path, speaker_identity_id)
+    analysis = context_manager.analyze_utterance(text)
 
     suggestion = None
-    if fields["need_reply"]:
+    # 只有“指定参会人”且“本地判断为问题/明确请求”才触发 AI 回复。
+    # 说明、示例、解释等内容仍会进入记忆，但不生成建议回复。
+    if context_manager.should_trigger_reply(fields["need_reply"], analysis):
         history = "\n".join([f"{m.speaker_name}: {m.text}" for m in session.messages[-8:]])
-        suggestion = await llm_client.suggest_reply(session.goal, history, text)
+        suggestion = await llm_client.suggest_reply(
+            session.goal,
+            history,
+            text,
+            structured_context=structured_context_for_session(session),
+        )
 
     message = Message(
         id=f"message_{uuid4().hex[:10]}",
@@ -230,10 +244,13 @@ async def create_message_from_text_audio(
         need_reply=fields["need_reply"],
         ai_suggestion=suggestion,
         created_at=now_iso(),
+        utterance_labels=analysis.labels,
+        should_reply=analysis.should_reply,
+        analysis_reason=analysis.reason,
     )
     session.messages.append(message)
     save_session(session)
-    context_manager.update_with_message(session, message)
+    context_manager.update_with_message(session, message, analysis=analysis)
     return message
 
 
@@ -260,11 +277,16 @@ async def process_audio_file(session_id: str, file: UploadFile) -> list[Message]
     new_messages: list[Message] = []
     for index, segment in enumerate(transcript_segments):
         text = segment["text"]
+        analysis = context_manager.analyze_utterance(text)
         suggestion = None
-        if fields["need_reply"]:
-            history_messages = (session.messages + new_messages)[-8:]
-            history = "\n".join([f"{m.speaker_name}: {m.text}" for m in history_messages])
-            suggestion = await llm_client.suggest_reply(session.goal, history, text)
+        if context_manager.should_trigger_reply(fields["need_reply"], analysis):
+            history = "\n".join([f"{m.speaker_name}: {m.text}" for m in session.messages[-8:]])
+            suggestion = await llm_client.suggest_reply(
+                session.goal,
+                history,
+                text,
+                structured_context=structured_context_for_session(session),
+            )
 
         message = Message(
             id=f"{message_id}_{index + 1}",
@@ -281,13 +303,16 @@ async def process_audio_file(session_id: str, file: UploadFile) -> list[Message]
             need_reply=fields["need_reply"],
             ai_suggestion=suggestion,
             created_at=now_iso(),
+            utterance_labels=analysis.labels,
+            should_reply=analysis.should_reply,
+            analysis_reason=analysis.reason,
         )
         new_messages.append(message)
+        session.messages.append(message)
+        # 逐段更新本地记忆，使后续分段能看到前面分段的上下文。
+        context_manager.update_with_message(session, message, analysis=analysis)
 
-    session.messages.extend(new_messages)
     save_session(session)
-    for message in new_messages:
-        context_manager.update_with_message(session, message)
     return new_messages
 
 
@@ -640,8 +665,14 @@ async def correct_message_speaker(
 
         updated = Message(**data)
         if updated.need_reply and not updated.ai_suggestion:
+            # 人工修正为“需要答复”属于显式意图，直接生成，但仍带上本地归纳的上下文。
             history = "\n".join([f"{m.speaker_name}: {m.text}" for m in session.messages[max(0, index - 8):index]])
-            updated.ai_suggestion = await llm_client.suggest_reply(session.goal, history, updated.text)
+            updated.ai_suggestion = await llm_client.suggest_reply(
+                session.goal,
+                history,
+                updated.text,
+                structured_context=structured_context_for_session(session),
+            )
 
         session.messages[index] = updated
         save_session(session)
@@ -676,7 +707,11 @@ async def summarize_session(session_id: str) -> SummaryResponse:
         raise HTTPException(status_code=400, detail="当前会话还没有可总结的内容")
 
     history = "\n".join([f"{m.speaker_name}: {m.text}" for m in session.messages])
-    summary = await llm_client.summarize(session.goal, history)
+    summary = await llm_client.summarize(
+        session.goal,
+        history,
+        structured_context=structured_context_for_session(session),
+    )
     session.summary = summary
     session.ended_at = session.ended_at or now_iso()
     save_session(session)
