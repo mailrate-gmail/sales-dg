@@ -163,10 +163,10 @@ FastAPI 默认错误格式：
 
 ### POST `/api/meetings/{meeting_id}/audio`
 
-上传一段前端切分后的音频片段。后端会完成：
+上传一段前端切分后的音频片段。后端会让 faster-whisper 基于 VAD/segments 继续断句，因此一次上传可能返回多条会话消息。后端会完成：
 
 1. 音频转 WAV；
-2. Whisper 转写；
+2. faster-whisper VAD + segments 转写；
 3. 声纹识别；
 4. 写入会议消息；
 5. 如该说话人需要 AI 回复，则生成建议回复。
@@ -194,21 +194,25 @@ curl -X POST \
 **响应示例**
 
 ```json
-{
-  "id": "message_1234567890",
-  "session_id": "session_20261118_103000_a1b2c3",
-  "participant_id": null,
-  "speaker_identity_id": "voice_ab12cd34",
-  "speaker_name": "未知说话人",
-  "role": "unknown",
-  "text": "我们现在主要问题是线索跟进不及时。",
-  "audio_file": "/app/data/audio/session_.../message_1234567890.wav",
-  "speaker_score": 0.63,
-  "need_reply": false,
-  "ai_suggestion": null,
-  "created_at": "2026-11-18T10:31:05",
-  "corrected": false
-}
+[
+  {
+    "id": "message_1234567890_1",
+    "session_id": "session_20261118_103000_a1b2c3",
+    "participant_id": null,
+    "speaker_identity_id": "voice_ab12cd34",
+    "speaker_name": "未知说话人",
+    "role": "unknown",
+    "text": "我们现在主要问题是线索跟进不及时。",
+    "start_time": 0.0,
+    "end_time": 3.4,
+    "audio_file": "/app/data/audio/session_.../message_1234567890.wav",
+    "speaker_score": 0.63,
+    "need_reply": false,
+    "ai_suggestion": null,
+    "created_at": "2026-11-18T10:31:05",
+    "corrected": false
+  }
+]
 ```
 
 ### 3.5 绑定识别个体 ID 与参会人员名称
@@ -376,7 +380,7 @@ curl -X POST \
 
 参会人 API 用于维护已知参会人和声纹样本。会议室中的“识别个体 ID 关联”是动态的，不要求提前创建参会人。
 
-### 4.1 查询参会人列表
+### 5.1 查询参会人列表
 
 ### GET `/api/participants`
 
@@ -397,7 +401,7 @@ curl -X POST \
 ]
 ```
 
-### 4.2 创建参会人
+### 5.2 创建参会人
 
 ### POST `/api/participants`
 
@@ -412,7 +416,7 @@ curl -X POST \
 }
 ```
 
-### 4.3 更新参会人
+### 5.3 更新参会人
 
 ### PUT `/api/participants/{participant_id}`
 
@@ -429,7 +433,7 @@ curl -X POST \
 
 字段均可选。
 
-### 4.4 上传声纹样本
+### 5.4 上传声纹样本
 
 ### POST `/api/participants/{participant_id}/voiceprint`
 
@@ -457,7 +461,7 @@ curl -X POST \
 
 ## 6. AI API
 
-### 5.1 独立生成建议回复
+### 6.1 独立生成建议回复
 
 ### POST `/api/ai/suggest-reply`
 
@@ -483,7 +487,7 @@ curl -X POST \
 
 ## 7. 系统配置 API
 
-### 6.1 查询模型配置
+### 7.1 查询模型配置
 
 ### GET `/api/config`
 
@@ -513,17 +517,30 @@ curl -X POST \
       "description": "用户自定义 OCI 模型"
     }
   ],
+  "asr_provider": "funasr_streaming",
   "whisper_model": "small",
   "whisper_device": "cpu",
   "whisper_compute_type": "int8",
-  "speaker_threshold": 0.7,
-  "energy_threshold": 0.02,
+  "funasr_model": "paraformer-zh-streaming",
+  "funasr_device": "cpu",
+  "oci_speech_region": "us-ashburn-1",
+  "oci_speech_compartment_id": "ocid1.compartment.oc1...",
+  "oci_speech_language": "zh-CN",
+  "oci_speech_profile": "DEFAULT",
+  "oci_speech_config_file": "/root/.oci/config",
+  "oci_speech_realtime_endpoint": "",
+  "speaker_threshold": 0.3,
+  "energy_threshold": 0.008,
   "silence_duration_ms": 800,
   "min_speech_duration_ms": 1000
 }
 ```
 
-### 6.2 更新模型配置
+> **API Key 安全**：`GET /api/config` 对已保存的 `llm_api_key` 仅返回掩码 `__MASKED__`；`PUT /api/config` 收到该掩码时保留原密钥，输入新值则覆盖，清空则删除。`POST /api/config/test` 同样会先将掩码还原为已保存密钥再测试。
+
+> **ASR 后端选择**：`asr_provider` 控制短音频上传接口（`POST /api/meetings/{id}/audio` 与 `POST /api/audio/process`）使用的引擎：`funasr_streaming`（默认）用本地 FunASR 流式模型整段识别；`faster_whisper` 用本地 faster-whisper 识别并返回带时间戳分段；`oci_speech` 尚未接入，返回 `501`。会议室实时流式 WebSocket 识别固定使用 FunASR，不受该字段影响。
+
+### 7.2 更新模型配置
 
 ### PUT `/api/config`
 
@@ -539,13 +556,20 @@ curl -X POST \
 data/model_config.json
 ```
 
-### 6.3 测试当前模型连接
+### 7.3 测试当前模型连接
 
 ### POST `/api/config/test`
 
 测试当前或传入的 OpenAI Compatible LLM 配置是否可用。该接口会根据 `llm_api_type` 发送一个极小的测试请求。
 
-当 `llm_api_type` 为 `responses` 时，会改为调用 `{llm_base_url}/v1/responses`，适用于 GPT-5 / 部分 OCI OpenAI Compatible 服务等 Responses API 模式。
+端点 URL 由 `llm_base_url` 与 `llm_api_type` 推导，并会自动避免重复拼接：
+
+- `responses`：调用 `/v1/responses`；`chat_completions`：调用 `/v1/chat/completions`；
+- 若 `llm_base_url` 已包含完整端点（如 OCI 的 `.../20231130/actions/v1/responses`），则直接沿用，不会再次追加；
+- 若 `llm_base_url` 以 `/v1` 结尾，则只追加 `/responses` 或 `/chat/completions`；
+- 否则按 `{llm_base_url}/v1/...` 拼接（如 DeepSeek、OpenAI 官方域名）。
+
+该机制适用于 GPT-5 / xAI / 部分 OCI OpenAI Compatible 服务等 Responses API 模式。
 
 **请求体**
 
@@ -591,7 +615,7 @@ data/model_config.json
 
 ## 9. 典型业务调用流程
 
-### 8.1 新会议实时辅助流程
+### 9.1 新会议实时辅助流程
 
 1. `POST /api/meetings` 创建会议；
 2. 前端浏览器采集音频并按能量切分；
@@ -601,7 +625,7 @@ data/model_config.json
 6. 会议结束后人工点击，调用 `POST /api/meetings/{meeting_id}/summary`；
 7. 需要保存时调用 `POST /api/meetings/{meeting_id}/export`。
 
-### 8.2 已知声纹参会人流程
+### 9.2 已知声纹参会人流程
 
 1. `POST /api/participants` 创建参会人；
 2. `POST /api/participants/{participant_id}/voiceprint` 上传声纹样本；

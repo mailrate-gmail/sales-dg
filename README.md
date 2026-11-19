@@ -16,6 +16,7 @@
 - 本地 SpeechBrain 声纹匹配；
 - 手动修正消息说话人；
 - 页面维护 LLM / Whisper / 声纹阈值 / 能量阈值配置；
+- 独立 ASR Provider 配置：FunASR streaming / faster-whisper / OCI Speech；
 - 根据参会人配置判断是否生成 AI 建议回复；
 - 客户发言白色展示，我方发言黄色展示；
 - 一键生成结构化会后总结；
@@ -57,8 +58,10 @@ LLM_API_KEY=你的API_KEY
 ### 3.2 Docker Compose 启动
 
 ```bash
-docker compose up --build
+docker compose up -d --build
 ```
+
+默认使用开发模式（`server/Dockerfile.dev`、`client/Dockerfile.dev`）：容器只提供运行依赖环境，源码通过 bind mount 从本机实时映射，**修改 `server/app` 或 `client/src` 下的代码无需重建镜像**（后端自动重启、前端 HMR 热更新）。
 
 启动后访问：
 
@@ -84,34 +87,52 @@ curl http://localhost:8000/api/health
 
 ## 4. 本地开发与验证
 
-### 4.1 前端独立开发模式（推荐调试前端）
+### 4.1 开发模式说明
 
-后端继续使用 Docker，前端在宿主机直接运行 Vite。这样修改 `client/src` 下的文件会自动热更新，不需要每次执行 `docker compose up -d --build`。
+默认 `docker compose up -d --build` 即为开发模式，容器与本机源码映射关系如下：
 
-先启动后端服务：
+| 容器 | 依赖环境（镜像内，依赖变化时才重建） | 本机源码挂载（改代码无需重建） |
+| --- | --- | --- |
+| server | Python 包、ffmpeg（`server/Dockerfile.dev`） | `./server/app` → `/app/app`，配 `uvicorn --reload` 自动重启 |
+| client | node_modules（`client/Dockerfile.dev`） | `./client/src`、`index.html`、`vite.config.ts`、`tsconfig.json` → `/app`，Vite HMR 热更新 |
 
-```bash
-docker compose up -d server
-```
+因此日常开发只需直接编辑本机源码：
 
-如果之前已经启动了 Docker 里的前端容器，先停止它，避免占用 3000 端口：
+- 改 `server/app/**/*.py`：后端自动重启生效；
+- 改 `client/src/**`：前端浏览器自动热更新。
+
+只有当依赖发生变化时才需要重建镜像：
+
+- 新增 Python/pip 包（改动 `server/requirements*.txt`）：
+
+  ```bash
+  docker compose up -d --build
+  ```
+
+- 变更 `client/package-lock.json`（`npm install` 增删依赖）：client 的 `/app/node_modules` 由**匿名卷**保护，普通 `--build` 会重建镜像但**沿用旧匿名卷**，导致新依赖没生效。需强制重建匿名卷：
+
+  ```bash
+  docker compose up -d --build --renew-anon-volumes
+  ```
+
+  或先清理容器再重建：
+
+  ```bash
+  docker compose down
+  docker compose up -d --build
+  ```
+
+  > 注意：`docker compose down`（不带 `-v`）不会删除匿名卷本身；`--renew-anon-volumes` 是最稳妥的做法，它会为 client 重新创建挂载了镜像内新 `node_modules` 的匿名卷。本 compose 中只有 client 使用匿名卷，server 的数据与模型缓存都是有名字的 bind mount，不受影响。
+
+> 生产部署：`server/Dockerfile`、`client/Dockerfile`（会把源码 COPY 进镜像）仍然保留。需要构建自包含镜像时，将 `docker-compose.yml` 中两个服务的 `build.dockerfile` 改回 `Dockerfile` 并移除源码 bind mount 即可。
+>
+> 生产部署注意：客户端是 Vite dev server，`/api` 代理目标由 `VITE_API_PROXY_TARGET` 决定，默认 `http://localhost:8000`。切回生产镜像后如后端不在同一容器，需要显式设置该环境变量（例如 `http://server:8000`），否则前端请求会打到客户端容器自身的 8000 端口。两份生产 Dockerfile 已通过静态检查（基础镜像、`COPY` 来源、`.dockerignore` 均正确），但尚未做完整 `docker build` 验证（需拉取 torch / funasr 等大依赖）。
+
+如果需要脱离 Docker 单独调试前端，也可以在宿主机直接运行 Vite（先确保 3000 端口未被容器占用）：
 
 ```bash
 docker compose stop client
-```
-
-再启动本地前端开发服务：
-
-```bash
-cd client
-npm install
-npm run dev:host
-```
-
-访问：
-
-```text
-http://localhost:3000
+cd client && npm install && npm run dev:host
 ```
 
 前端会通过 Vite 代理把 `/api` 请求转发到后端 `http://localhost:8000`。
@@ -167,6 +188,15 @@ data/
 ├── audio/
 └── exports/
 ```
+
+FunASR / ModelScope 模型缓存会保存在：
+
+```text
+model_cache/
+hf_cache/
+```
+
+这些目录用于避免容器重建后重复下载 ASR 模型，已加入 `.gitignore`。
 
 ## 6. 演示流程
 
