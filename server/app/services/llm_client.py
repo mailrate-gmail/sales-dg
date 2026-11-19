@@ -9,10 +9,26 @@ from app.services.runtime_config import runtime_config
 
 class LLMClient:
     def api_url(self, config: ModelConfig) -> str:
+        """根据 api_type 生成完整端点。
+
+        兼容三种 base_url 写法，避免重复拼接路径：
+        - 已含完整端点：https://host/v1/responses（或 /v1/chat/completions）
+        - 仅含版本前缀：https://host/v1
+        - 仅含主机：https://host
+        """
         base = config.llm_base_url.rstrip("/")
         if config.llm_api_type == "responses":
-            return base + "/v1/responses"
-        return base + "/v1/chat/completions"
+            endpoint = "/responses"
+            full_suffix = "/v1/responses"
+        else:
+            endpoint = "/chat/completions"
+            full_suffix = "/v1/chat/completions"
+
+        if base.endswith(full_suffix):
+            return base
+        if base.endswith("/v1"):
+            return base + endpoint
+        return base + "/v1" + endpoint
 
     def headers(self, config: ModelConfig) -> dict[str, str]:
         return {

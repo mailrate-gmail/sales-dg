@@ -9,9 +9,18 @@ class Settings(BaseSettings):
     whisper_model: str = "small"
     whisper_device: str = "cpu"
     whisper_compute_type: str = "int8"
+    asr_provider: str = "funasr_streaming"
+    funasr_model: str = "paraformer-zh-streaming"
+    funasr_device: str = "cpu"
+    oci_speech_region: str = ""
+    oci_speech_compartment_id: str = ""
+    oci_speech_language: str = "zh-CN"
+    oci_speech_profile: str = "DEFAULT"
+    oci_speech_config_file: str = "/root/.oci/config"
+    oci_speech_realtime_endpoint: str = ""
 
-    speaker_threshold: float = 0.70
-    energy_threshold: float = 0.02
+    speaker_threshold: float = 0.30
+    energy_threshold: float = 0.008
     silence_duration_ms: int = 800
     min_speech_duration_ms: int = 1000
 

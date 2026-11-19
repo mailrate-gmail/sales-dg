@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
+const VOICE_GAP_SPLIT_MS = 800
+const VOICE_ENERGY_TRIGGER = 0.008
 
 type Role = 'self' | 'customer' | 'other' | 'unknown'
 type Page = 'new' | 'history' | 'settings' | 'room'
@@ -28,6 +30,8 @@ interface Message {
   need_reply: boolean
   ai_suggestion?: string
   corrected: boolean
+  start_time?: number | null
+  end_time?: number | null
 }
 
 interface SessionDetail {
@@ -59,9 +63,18 @@ interface ModelConfig {
   llm_timeout_seconds: number
   model_availability: Record<string, boolean>
   custom_models: CustomModelConfig[]
+  asr_provider: 'funasr_streaming' | 'faster_whisper' | 'oci_speech'
   whisper_model: string
   whisper_device: string
   whisper_compute_type: string
+  funasr_model: string
+  funasr_device: string
+  oci_speech_region: string
+  oci_speech_compartment_id: string
+  oci_speech_language: string
+  oci_speech_profile: string
+  oci_speech_config_file: string
+  oci_speech_realtime_endpoint: string
   speaker_threshold: number
   energy_threshold: number
   silence_duration_ms: number
@@ -140,11 +153,20 @@ const defaultConfig: ModelConfig = {
     grok: false,
   },
   custom_models: [],
+  asr_provider: 'funasr_streaming',
   whisper_model: 'small',
   whisper_device: 'cpu',
   whisper_compute_type: 'int8',
-  speaker_threshold: 0.7,
-  energy_threshold: 0.02,
+  funasr_model: 'paraformer-zh-streaming',
+  funasr_device: 'cpu',
+  oci_speech_region: '',
+  oci_speech_compartment_id: '',
+  oci_speech_language: 'zh-CN',
+  oci_speech_profile: 'DEFAULT',
+  oci_speech_config_file: '/root/.oci/config',
+  oci_speech_realtime_endpoint: '',
+  speaker_threshold: 0.3,
+  energy_threshold: 0.008,
   silence_duration_ms: 800,
   min_speech_duration_ms: 1000,
 }
@@ -197,6 +219,7 @@ function AgentMemoryBlock({ title, items }: { title: string; items: string[] }) 
 export function App() {
   const [page, setPage] = useState<Page>('new')
   const [theme, setTheme] = useState<Theme>('dark')
+  const [menuCollapsed, setMenuCollapsed] = useState(false)
   const [customerName, setCustomerName] = useState('')
   const [goal, setGoal] = useState('了解客户当前业务痛点，并推动下一次需求调研。')
   const [sessionId, setSessionId] = useState<string>('')
@@ -204,6 +227,7 @@ export function App() {
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [messages, setMessages] = useState<Message[]>([])
   const [speakerNames, setSpeakerNames] = useState<Record<string, string>>({})
+  const [speakerPanelStartIndex, setSpeakerPanelStartIndex] = useState(0)
   const [speakerPushTargets, setSpeakerPushTargets] = useState<Record<string, boolean>>({})
   const [aiQas, setAiQas] = useState<AiQaItem[]>([])
   const [agentMemory, setAgentMemory] = useState<AgentMemory | null>(null)
@@ -212,11 +236,16 @@ export function App() {
   const [recording, setRecording] = useState(false)
   const [speakerPanelOpen, setSpeakerPanelOpen] = useState(true)
   const [energyLevel, setEnergyLevel] = useState(0)
+  const [recordingStatus, setRecordingStatus] = useState('未开始录音')
   const [config, setConfig] = useState<ModelConfig>(defaultConfig)
   const [connectionTest, setConnectionTest] = useState('')
   const [testingConnection, setTestingConnection] = useState(false)
 
   const mediaStreamRef = useRef<MediaStream | null>(null)
+  const websocketRef = useRef<WebSocket | null>(null)
+  const streamingReadyRef = useRef(false)
+  const audioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
+  const audioProcessorRef = useRef<ScriptProcessorNode | null>(null)
   const segmentRecorderRef = useRef<MediaRecorder | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
@@ -244,7 +273,7 @@ export function App() {
 
   const recognizedSpeakers = useMemo(() => {
     const map = new Map<string, RecognizedSpeaker>()
-    for (const message of messages) {
+    for (const message of messages.slice(speakerPanelStartIndex)) {
       const id = getSpeakerIdentity(message)
       const existing = map.get(id)
       const displayName = speakerNames[id] ?? (message.speaker_name === '未知说话人' ? '' : message.speaker_name)
@@ -263,7 +292,7 @@ export function App() {
       }
     }
     return Array.from(map.values())
-  }, [messages, speakerNames])
+  }, [messages, speakerNames, speakerPanelStartIndex])
 
   const availableModelCards: ModelPreset[] = useMemo(() => [
     ...modelPresets,
@@ -440,6 +469,7 @@ export function App() {
     setSessionTitle(data.title)
     setMessages([])
     setSpeakerNames({})
+    setSpeakerPanelStartIndex(0)
     setSpeakerPushTargets({})
     setAiQas([])
     setAgentMemory(null)
@@ -462,6 +492,7 @@ export function App() {
     setSessionTitle(data.title)
     setGoal(data.goal)
     setMessages(data.messages || [])
+    setSpeakerPanelStartIndex(0)
     setSummary(data.summary || '')
     setAiQas((data.messages || []).filter((m) => m.ai_suggestion).map((m) => ({
       id: m.id,
@@ -499,14 +530,155 @@ export function App() {
     source.connect(analyser)
 
     audioContextRef.current = audioContext
+    audioSourceRef.current = source
     analyserRef.current = analyser
     mediaStreamRef.current = stream
     chunksRef.current = []
     recordingRef.current = true
     speechActiveRef.current = false
 
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const ws = new WebSocket(`${wsProtocol}//${window.location.host}/api/meetings/${sessionId}/asr/funasr/stream`)
+    ws.binaryType = 'arraybuffer'
+    websocketRef.current = ws
+    streamingReadyRef.current = false
+
+    ws.onopen = () => {
+      setRecordingStatus('FunASR 流式识别已连接，请开始讲话')
+    }
+    ws.onerror = () => {
+      setRecordingStatus('FunASR WebSocket 连接异常')
+      cleanupStreamingRecorder('流式识别连接异常，已停止录音')
+    }
+    ws.onclose = () => {
+      if (recordingRef.current) {
+        cleanupStreamingRecorder('流式识别连接已断开，已停止录音')
+      }
+    }
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data)
+      if (data.type === 'partial') {
+        setRecordingStatus(`实时字幕：${data.text}`)
+      } else if (data.type === 'final') {
+        const message: Message = data.message
+        setMessages((items) => [...items, message])
+        setRecordingStatus(`识别完成：${message.speaker_name}`)
+        if (message.ai_suggestion) setLatestSuggestion(message.ai_suggestion)
+        void maybePushQuestionToAi(message, [...messages, message])
+        void loadSessions()
+        void loadAgentMemory(sessionId)
+      } else if (data.type === 'error') {
+        setRecordingStatus(`流式识别错误：${data.message}`)
+      } else if (data.type === 'loading') {
+        setRecordingStatus(data.message || 'FunASR 模型加载中...')
+      } else if (data.type === 'ready') {
+        streamingReadyRef.current = true
+        setRecordingStatus('FunASR 流式识别已就绪，请开始讲话')
+      }
+    }
+
+    const processor = audioContext.createScriptProcessor(4096, 1, 1)
+    audioProcessorRef.current = processor
+    source.connect(processor)
+    processor.connect(audioContext.destination)
+
+    processor.onaudioprocess = (event) => {
+      if (!recordingRef.current || websocketRef.current?.readyState !== WebSocket.OPEN) return
+      const input = event.inputBuffer.getChannelData(0)
+      handlePcmFrame(input, audioContext.sampleRate)
+    }
+
     setRecording(true)
-    monitorEnergy()
+    setRecordingStatus('监听中：请开始讲话')
+  }
+
+  function handlePcmFrame(input: Float32Array, sampleRate: number) {
+    if (!streamingReadyRef.current) return
+    const rms = Math.sqrt(input.reduce((sum, value) => sum + value * value, 0) / input.length)
+    const now = Date.now()
+    const activeConfig = configRef.current
+    const effectiveEnergyThreshold = Math.min(activeConfig.energy_threshold || VOICE_ENERGY_TRIGGER, VOICE_ENERGY_TRIGGER)
+    setEnergyLevel(rms)
+
+    if (rms >= effectiveEnergyThreshold) {
+      lastVoiceAtRef.current = now
+      if (!speechActiveRef.current) {
+        speechActiveRef.current = true
+        segmentStartedAtRef.current = now
+        setRecordingStatus('正在流式识别语音')
+      }
+    }
+
+    if (speechActiveRef.current) {
+      const pcm16 = floatTo16BitPcm(downsampleBuffer(input, sampleRate, 16000))
+      websocketRef.current?.send(pcm16)
+
+      const silenceMs = now - lastVoiceAtRef.current
+      const speechMs = now - segmentStartedAtRef.current
+      if (silenceMs >= VOICE_GAP_SPLIT_MS && speechMs >= configRef.current.min_speech_duration_ms) {
+        sendStreamingControl({ type: 'final' })
+        speechActiveRef.current = false
+        setRecordingStatus('语音段已提交，等待最终结果')
+      }
+    }
+  }
+
+  function downsampleBuffer(buffer: Float32Array, inputRate: number, outputRate: number) {
+    if (outputRate === inputRate) return buffer
+    const sampleRateRatio = inputRate / outputRate
+    const newLength = Math.round(buffer.length / sampleRateRatio)
+    const result = new Float32Array(newLength)
+    let offsetResult = 0
+    let offsetBuffer = 0
+    while (offsetResult < result.length) {
+      const nextOffsetBuffer = Math.round((offsetResult + 1) * sampleRateRatio)
+      let accum = 0
+      let count = 0
+      for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i += 1) {
+        accum += buffer[i]
+        count += 1
+      }
+      result[offsetResult] = accum / count
+      offsetResult += 1
+      offsetBuffer = nextOffsetBuffer
+    }
+    return result
+  }
+
+  function floatTo16BitPcm(input: Float32Array) {
+    const output = new Int16Array(input.length)
+    for (let i = 0; i < input.length; i += 1) {
+      const sample = Math.max(-1, Math.min(1, input[i]))
+      output[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff
+    }
+    return output.buffer
+  }
+
+  function sendStreamingControl(payload: object) {
+    const ws = websocketRef.current
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(payload))
+    }
+  }
+
+  function cleanupStreamingRecorder(status = '已停止录音') {
+    recordingRef.current = false
+    speechActiveRef.current = false
+    if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current)
+    audioProcessorRef.current?.disconnect()
+    audioSourceRef.current?.disconnect()
+    void audioContextRef.current?.close().catch(() => undefined)
+    mediaStreamRef.current?.getTracks().forEach((track) => track.stop())
+    websocketRef.current = null
+    streamingReadyRef.current = false
+    audioProcessorRef.current = null
+    audioSourceRef.current = null
+    mediaStreamRef.current = null
+    analyserRef.current = null
+    audioContextRef.current = null
+    setEnergyLevel(0)
+    setRecording(false)
+    setRecordingStatus(status)
   }
 
   function startSpeechSegment() {
@@ -515,6 +687,7 @@ export function App() {
 
     chunksRef.current = []
     speechActiveRef.current = true
+    setRecordingStatus('正在录制语音段')
     segmentStartedAtRef.current = Date.now()
     lastVoiceAtRef.current = Date.now()
 
@@ -531,6 +704,7 @@ export function App() {
       segmentRecorderRef.current = null
       speechActiveRef.current = false
       if (blob.size > 0) await uploadAudioSegment(blob)
+      if (recordingRef.current) setRecordingStatus('监听中：等待下一段语音')
     }
 
     recorder.start(250)
@@ -545,10 +719,11 @@ export function App() {
     const rms = Math.sqrt(buffer.reduce((sum, value) => sum + value * value, 0) / buffer.length)
     const now = Date.now()
     const activeConfig = configRef.current
+    const effectiveEnergyThreshold = Math.min(activeConfig.energy_threshold || VOICE_ENERGY_TRIGGER, VOICE_ENERGY_TRIGGER)
 
     setEnergyLevel(rms)
 
-    if (rms >= activeConfig.energy_threshold) {
+    if (rms >= effectiveEnergyThreshold) {
       lastVoiceAtRef.current = now
       if (!speechActiveRef.current) {
         startSpeechSegment()
@@ -558,7 +733,9 @@ export function App() {
     if (speechActiveRef.current) {
       const silenceMs = now - lastVoiceAtRef.current
       const speechMs = now - segmentStartedAtRef.current
-      if (silenceMs >= activeConfig.silence_duration_ms && speechMs >= activeConfig.min_speech_duration_ms) {
+      if (
+        (silenceMs >= VOICE_GAP_SPLIT_MS && speechMs >= activeConfig.min_speech_duration_ms)
+      ) {
         flushSpeechSegment()
       }
     }
@@ -585,36 +762,50 @@ export function App() {
     form.append('session_id', activeSessionId)
     form.append('file', blob, 'speech.webm')
     try {
+      setRecordingStatus('语音段上传中，正在识别...')
       const res = await fetch(`${API_BASE}/api/meetings/${activeSessionId}/audio`, { method: 'POST', body: form })
       if (!res.ok) {
         const error = await res.json().catch(() => null)
+        setRecordingStatus(error?.detail || '音频识别失败')
         alert(error?.detail || '音频识别失败，请稍后重试。')
         return
       }
-      const message: Message = await res.json()
-      setMessages((items) => [...items, message])
-      if (message.ai_suggestion) setLatestSuggestion(message.ai_suggestion)
-      void maybePushQuestionToAi(message, [...messages, message])
+      const data = await res.json()
+      const newMessages: Message[] = Array.isArray(data) ? data : [data]
+      if (newMessages.length === 0) {
+        setRecordingStatus('识别完成，但没有返回文本')
+        return
+      }
+      setMessages((items) => [...items, ...newMessages])
+      setRecordingStatus(`识别完成：${newMessages.length} 条文本`)
+      const latestAi = [...newMessages].reverse().find((item) => item.ai_suggestion)?.ai_suggestion
+      if (latestAi) setLatestSuggestion(latestAi)
+      let runningHistory = [...messages]
+      for (const message of newMessages) {
+        runningHistory = [...runningHistory, message]
+        void maybePushQuestionToAi(message, runningHistory)
+      }
       await loadSessions()
       await loadAgentMemory(activeSessionId)
     } catch (error) {
       console.error(error)
+      setRecordingStatus('音频上传或识别异常，请检查后端日志')
     }
   }
 
   function stopRecording() {
     recordingRef.current = false
+    if (speechActiveRef.current) {
+      sendStreamingControl({ type: 'final' })
+      speechActiveRef.current = false
+    }
+    sendStreamingControl({ type: 'close' })
+    websocketRef.current?.close()
     if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current)
     flushSpeechSegment()
     window.setTimeout(() => {
-      void audioContextRef.current?.close()
-      mediaStreamRef.current?.getTracks().forEach((track) => track.stop())
-      mediaStreamRef.current = null
-      analyserRef.current = null
-      audioContextRef.current = null
-      setEnergyLevel(0)
+      cleanupStreamingRecorder('已停止录音')
     }, 300)
-    setRecording(false)
   }
 
   async function applySpeakerName(identityId: string) {
@@ -658,6 +849,31 @@ export function App() {
 
   function toggleSpeakerAiPush(identityId: string, enabled: boolean) {
     setSpeakerPushTargets((current) => ({ ...current, [identityId]: enabled }))
+  }
+
+  function clearRecognizedSpeakers() {
+    setSpeakerNames({})
+    setSpeakerPushTargets({})
+    setSpeakerPanelStartIndex(messages.length)
+  }
+
+  async function clearRealtimeConversation() {
+    if (!sessionId) return
+    if (!confirm('确认清空当前会议的实时会话记录吗？')) return
+    const res = await fetch(`${API_BASE}/api/meetings/${sessionId}/messages`, { method: 'DELETE' })
+    if (!res.ok) {
+      alert('清空实时会话失败')
+      return
+    }
+    setMessages([])
+    setSpeakerNames({})
+    setSpeakerPushTargets({})
+    setSpeakerPanelStartIndex(0)
+    setAiQas([])
+    setLatestSuggestion('')
+    setSummary('')
+    await loadAgentMemory(sessionId)
+    await loadSessions()
   }
 
   function isLikelyQuestion(text: string) {
@@ -742,20 +958,30 @@ export function App() {
   }
 
   return (
-    <div className="app-shell">
+    <div className={menuCollapsed ? 'app-shell menu-collapsed' : 'app-shell'}>
       <aside className="sidebar">
-        <div className="brand">
-          <strong>AI 会谈辅助</strong>
-          <span>Meeting Copilot</span>
+        <div className="sidebar-top">
+          <div className="brand">
+            <strong>{menuCollapsed ? 'AI' : 'AI 会谈辅助'}</strong>
+            {!menuCollapsed && <span>Meeting Copilot</span>}
+          </div>
+          <button
+            className="collapse-button"
+            title={menuCollapsed ? '展开菜单' : '折叠菜单'}
+            aria-label={menuCollapsed ? '展开菜单' : '折叠菜单'}
+            onClick={() => setMenuCollapsed((collapsed) => !collapsed)}
+          >
+            {menuCollapsed ? '›' : '‹'}
+          </button>
         </div>
         <nav className="main-menu">
-          <button className={page === 'new' ? 'active' : ''} onClick={() => setPage('new')}>新建会议</button>
-          <button className={page === 'history' ? 'active' : ''} onClick={() => { setPage('history'); void loadSessions() }}>历史会议</button>
-          <button className={page === 'settings' ? 'active' : ''} onClick={() => setPage('settings')}>系统设置</button>
+          <button title="新建会议" className={page === 'new' ? 'active' : ''} onClick={() => setPage('new')}><span>＋</span><b>新建会议</b></button>
+          <button title="历史会议" className={page === 'history' ? 'active' : ''} onClick={() => { setPage('history'); void loadSessions() }}><span>↺</span><b>历史会议</b></button>
+          <button title="系统设置" className={page === 'settings' ? 'active' : ''} onClick={() => setPage('settings')}><span>⚙</span><b>系统设置</b></button>
         </nav>
         {sessionId && (
-          <button className={page === 'room' ? 'active room-entry' : 'room-entry'} onClick={() => setPage('room')}>
-            返回会议室
+          <button title="返回会议室" className={page === 'room' ? 'active room-entry' : 'room-entry'} onClick={() => setPage('room')}>
+            <span>↗</span><b>返回会议室</b>
           </button>
         )}
       </aside>
@@ -871,7 +1097,8 @@ export function App() {
                 <option value="responses">Responses (/v1/responses)</option>
               </select>
             </label>
-            <label>API Key<input type="password" value={config.llm_api_key} onChange={(e) => updateConfig('llm_api_key', e.target.value)} /></label>
+            <label>API Key<input type="password" value={config.llm_api_key} placeholder="未配置" title="已保存的密钥以掩码显示；如需更换请直接输入新值，留空并保存可清除" onChange={(e) => updateConfig('llm_api_key', e.target.value)} /></label>
+            <small className="field-hint">为安全起见，已保存的密钥仅以掩码返回；不修改直接保存会保留原密钥。</small>
             <label>请求超时秒数<input type="number" value={config.llm_timeout_seconds} onChange={(e) => updateConfig('llm_timeout_seconds', Number(e.target.value))} /></label>
           </div>
 
@@ -884,6 +1111,28 @@ export function App() {
           {connectionTest && <div className="connection-result">{connectionTest}</div>}
 
           <div className="model-section-title">
+            <h2>ASR Provider 配置</h2>
+            <span>选择语音识别后端。会议室实时流式识别固定使用 FunASR；此项控制短音频上传（fallback）使用的引擎：FunASR 本地流式模型整段识别，或 faster-whisper 本地短音频识别。OCI Speech 尚未接入，选中后短音频上传会明确报错。</span>
+          </div>
+          <div className="config-grid">
+            <label>ASR Provider
+              <select value={config.asr_provider} onChange={(e) => updateConfig('asr_provider', e.target.value as ModelConfig['asr_provider'])}>
+                <option value="funasr_streaming">FunASR Streaming（本地流式）</option>
+                <option value="faster_whisper">faster-whisper（本地短音频）</option>
+                <option value="oci_speech">OCI Speech（云端实时，待接入）</option>
+              </select>
+            </label>
+            <label>FunASR Model<input value={config.funasr_model} onChange={(e) => updateConfig('funasr_model', e.target.value)} /></label>
+            <label>FunASR Device<input value={config.funasr_device} onChange={(e) => updateConfig('funasr_device', e.target.value)} /></label>
+            <label>OCI Region<input placeholder="us-ashburn-1" value={config.oci_speech_region} onChange={(e) => updateConfig('oci_speech_region', e.target.value)} /></label>
+            <label>OCI Compartment OCID<input value={config.oci_speech_compartment_id} onChange={(e) => updateConfig('oci_speech_compartment_id', e.target.value)} /></label>
+            <label>OCI Language<input value={config.oci_speech_language} onChange={(e) => updateConfig('oci_speech_language', e.target.value)} /></label>
+            <label>OCI Profile<input value={config.oci_speech_profile} onChange={(e) => updateConfig('oci_speech_profile', e.target.value)} /></label>
+            <label>OCI Config File<input value={config.oci_speech_config_file} onChange={(e) => updateConfig('oci_speech_config_file', e.target.value)} /></label>
+            <label>OCI Realtime Endpoint<input placeholder="wss://realtime.aiservice.<region>.oci.oraclecloud.com/..." value={config.oci_speech_realtime_endpoint} onChange={(e) => updateConfig('oci_speech_realtime_endpoint', e.target.value)} /></label>
+          </div>
+
+          <div className="model-section-title">
             <h2>本地语音与识别参数</h2>
             <span>控制 Whisper、声纹匹配和浏览器能量切分。</span>
           </div>
@@ -893,7 +1142,7 @@ export function App() {
             <label>Whisper Compute Type<input value={config.whisper_compute_type} onChange={(e) => updateConfig('whisper_compute_type', e.target.value)} /></label>
             <label>声纹阈值<input type="number" step="0.01" value={config.speaker_threshold} onChange={(e) => updateConfig('speaker_threshold', Number(e.target.value))} /></label>
             <label>能量阈值<input type="number" step="0.001" value={config.energy_threshold} onChange={(e) => updateConfig('energy_threshold', Number(e.target.value))} /></label>
-            <label>静音切分 ms<input type="number" value={config.silence_duration_ms} onChange={(e) => updateConfig('silence_duration_ms', Number(e.target.value))} /></label>
+            <label>语音间断切分 ms<input type="number" value={VOICE_GAP_SPLIT_MS} disabled readOnly /></label>
             <label>最短语音 ms<input type="number" value={config.min_speech_duration_ms} onChange={(e) => updateConfig('min_speech_duration_ms', Number(e.target.value))} /></label>
           </div>
         </section>
@@ -930,9 +1179,12 @@ export function App() {
         <section className="page-card speaker-panel">
           <div className="section-heading">
             <h2>参会人员</h2>
-            <button className="secondary-action" onClick={() => setSpeakerPanelOpen((open) => !open)}>
-              {speakerPanelOpen ? '折叠' : '展开'}
-            </button>
+            <div className="section-actions">
+              <button className="secondary-action" onClick={clearRecognizedSpeakers}>清空</button>
+              <button className="secondary-action" onClick={() => setSpeakerPanelOpen((open) => !open)}>
+                {speakerPanelOpen ? '折叠' : '展开'}
+              </button>
+            </div>
           </div>
           {speakerPanelOpen && (
             <div className="speaker-list">
@@ -969,8 +1221,12 @@ export function App() {
           <section className="page-card conversation-card">
             <div className="section-heading">
               <h2>实时会话</h2>
-              <span>当前能量：{energyLevel.toFixed(4)} / 阈值：{config.energy_threshold}</span>
+              <div className="section-actions">
+                <span>当前能量：{energyLevel.toFixed(4)} / 触发阈值：{Math.min(config.energy_threshold || VOICE_ENERGY_TRIGGER, VOICE_ENERGY_TRIGGER)} / 停顿 {VOICE_GAP_SPLIT_MS / 1000}s 切分</span>
+                <button className="secondary-action" onClick={clearRealtimeConversation}>清空</button>
+              </div>
             </div>
+            <div className="recording-status">{recordingStatus}</div>
             <div className="messages">
               {messages.length === 0 && <div className="empty">暂无会话内容</div>}
               {messages.map((message) => (
@@ -978,6 +1234,7 @@ export function App() {
                   <div className="message-header">
                     <strong>{message.speaker_name}{message.corrected ? '（已修正）' : ''}</strong>
                     <code>{getSpeakerIdentity(message)}</code>
+                    {typeof message.start_time === 'number' && typeof message.end_time === 'number' && <span className="score">{message.start_time.toFixed(1)}s - {message.end_time.toFixed(1)}s</span>}
                     <span className="score">匹配分：{message.speaker_score?.toFixed(2) ?? '-'}</span>
                   </div>
                   <p>{message.text}</p>

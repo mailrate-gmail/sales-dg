@@ -130,6 +130,10 @@ code {
   min-height: 100vh;
 }
 
+.app-shell.menu-collapsed {
+  grid-template-columns: 76px 1fr;
+}
+
 .sidebar {
   position: sticky;
   top: 0;
@@ -139,10 +143,18 @@ code {
   border-right: 1px solid var(--border);
 }
 
+.sidebar-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 18px;
+}
+
 .brand {
   display: grid;
   gap: 6px;
-  padding: 10px 8px 24px;
+  padding: 10px 8px 0;
 }
 
 .brand strong {
@@ -152,6 +164,23 @@ code {
 .brand span {
   color: var(--muted);
   font-size: 13px;
+}
+
+.collapse-button {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  margin-top: 6px;
+  border-radius: 999px;
+  background: var(--panel-soft);
+  color: var(--text);
+  border: 1px solid var(--border);
+  font-size: 24px;
+  line-height: 1;
+}
+
+.collapse-button:hover {
+  background: var(--input);
 }
 
 .main-menu {
@@ -166,6 +195,23 @@ code {
   background: transparent;
   color: var(--text);
   border: 1px solid transparent;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.main-menu button span,
+.room-entry span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  flex: 0 0 20px;
+}
+
+.main-menu button b,
+.room-entry b {
+  font-weight: 500;
 }
 
 .main-menu button:hover,
@@ -178,6 +224,31 @@ code {
 
 .room-entry {
   margin-top: 18px;
+}
+
+.menu-collapsed .sidebar {
+  padding-inline: 12px;
+}
+
+.menu-collapsed .sidebar-top {
+  display: grid;
+  justify-items: center;
+}
+
+.menu-collapsed .brand {
+  padding-inline: 0;
+  text-align: center;
+}
+
+.menu-collapsed .main-menu button,
+.menu-collapsed .room-entry {
+  justify-content: center;
+  padding-inline: 0;
+}
+
+.menu-collapsed .main-menu button b,
+.menu-collapsed .room-entry b {
+  display: none;
 }
 
 .content {
@@ -236,6 +307,18 @@ code {
   flex-wrap: wrap;
 }
 
+.section-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.section-actions span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .history-list {
   display: grid;
   gap: 12px;
@@ -257,8 +340,15 @@ code {
 
 .history-item span,
 .history-item small,
-.empty {
+.empty,
+.field-hint {
   color: var(--muted);
+}
+
+.field-hint {
+  display: block;
+  margin: -6px 0 4px;
+  font-size: 12px;
 }
 
 .settings-stack {
@@ -501,6 +591,16 @@ code {
   border: 1px solid var(--border);
   border-radius: 14px;
   padding: 12px;
+}
+
+.recording-status {
+  margin: -4px 0 12px;
+  padding: 10px 12px;
+  color: var(--muted);
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  font-size: 13px;
 }
 
 .message {

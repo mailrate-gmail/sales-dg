@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 
 Role = Literal["self", "customer", "other", "unknown"]
 LLMApiType = Literal["chat_completions", "responses"]
+ASRProvider = Literal["funasr_streaming", "faster_whisper", "oci_speech"]
 AgentActionType = Literal[
     "suggest_reply",
     "extract_pain_point",
@@ -48,6 +49,8 @@ class Message(BaseModel):
     speaker_name: str = "未知说话人"
     role: Role = "unknown"
     text: str
+    start_time: Optional[float] = None
+    end_time: Optional[float] = None
     audio_file: Optional[str] = None
     speaker_score: Optional[float] = None
     need_reply: bool = False
@@ -171,11 +174,20 @@ class ModelConfig(BaseModel):
         }
     )
     custom_models: list[CustomModelConfig] = Field(default_factory=list)
+    asr_provider: ASRProvider = "funasr_streaming"
     whisper_model: str = "small"
     whisper_device: str = "cpu"
     whisper_compute_type: str = "int8"
-    speaker_threshold: float = 0.70
-    energy_threshold: float = 0.02
+    funasr_model: str = "paraformer-zh-streaming"
+    funasr_device: str = "cpu"
+    oci_speech_region: str = ""
+    oci_speech_compartment_id: str = ""
+    oci_speech_language: str = "zh-CN"
+    oci_speech_profile: str = "DEFAULT"
+    oci_speech_config_file: str = "/root/.oci/config"
+    oci_speech_realtime_endpoint: str = ""
+    speaker_threshold: float = 0.30
+    energy_threshold: float = 0.008
     silence_duration_ms: int = 800
     min_speech_duration_ms: int = 1000
 
